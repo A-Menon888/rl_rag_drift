@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+results/figures/*
+results/metrics/*
+results/checkpoints/*
+*.pyc
