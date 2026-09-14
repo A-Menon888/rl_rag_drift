@@ -160,12 +160,12 @@ The field remains named `fact` for compatibility, but its runtime value is now a
 
 Embedding behavior:
 
-- Default: deterministic hashed bag-of-token vectors.
-- Optional: sentence-transformers support exists in `Embedder` but is not enabled by default.
+- Default: semantic embeddings via `sentence-transformers` (using `all-MiniLM-L6-v2` by default).
+- Optional: deterministic hashed bag-of-token vectors are available as a fallback.
 - Optional: FAISS support exists but is not enabled by default.
 - NumPy inner-product search is the default because it is lightweight and avoids a Windows FAISS/PyTorch OpenMP conflict.
 
-The fallback is lexical/hash based, not a semantic embedding model. Retrieval quality is therefore a known limitation and must not be confused with RL quality.
+Retrieval uses true semantic embeddings, providing a clean and realistic environment signal for the RL agent.
 
 ## Answer generation
 
@@ -278,10 +278,10 @@ self.optimizer.step()
 
 ```text
 G_t = r_t + gamma*r_(t+1) + gamma^2*r_(t+2) + ...
-loss = -sum(log_probability(action_t) * normalized_return_t)
+loss = -sum(log_probability(action_t) * normalized_return_t) - entropy_coef * sum(entropies)
 ```
 
-This is genuine policy-gradient learning, but intentionally a simple REINFORCE baseline. It is not PPO and has no critic, replay buffer, or generalized advantage estimation.
+This is genuine policy-gradient learning using a REINFORCE baseline augmented with an entropy bonus to encourage exploration during adaptation. It is not PPO and has no critic or replay buffer.
 
 ## Baseline policies
 
@@ -306,7 +306,8 @@ Policy means the decision strategy. Action means one concrete decision produced 
 8. Saves `rl_adapted_policy_kb_b.pt`.
 9. Evaluates the adapted policy deterministically on KB B.
 10. Evaluates retained baseline policies on both snapshots.
-11. Writes comparison metrics and reward figures.
+11. Calculates an automated Approval Score comparing the adapted policy to the old policy on KB-B (`Score = (ΔAccuracy * 10) + (ΔReward * 1) - (ΔCost * 1)`).
+12. Writes comparison metrics (including approval status) and reward figures.
 
 The old synthetic generator and active drift loops were removed from the runner. The legacy drift module remains unused because KB-A and KB-B are manually prepared snapshots.
 
@@ -344,8 +345,8 @@ In this short run, adaptation did not improve the measured KB-B metrics. That is
 seed: 7
 corpus_dir: data/documentation
 top_k: 3
-train_episodes: 20
-learning_rate: 0.01
+train_episodes: 1000
+learning_rate: 0.001
 retrieval_cost: 0.10
 correct_reward: 1.0
 incorrect_reward: -1.0
@@ -423,4 +424,4 @@ Recommended later order:
 
 ## Short summary
 
-The project now uses two small hypothetical Markdown documentation snapshots, KB A and manually changed KB B. Documents are loaded and chunked with metadata, queries are grounded to exact chunks, and the existing RL-RAG pipeline trains on A, evaluates the frozen old policy on B, continues training from the old weights on B, and evaluates the adapted policy. The RL algorithm, action space, cache, and reward function are unchanged. The latest short run did not improve KB-B metrics after adaptation, so longer training or better task coverage is needed before claiming recovery.
+The project uses two small hypothetical Markdown documentation snapshots, KB A and manually changed KB B. Documents are loaded and chunked with metadata, queries are grounded to exact chunks. The existing RL-RAG pipeline trains on A, evaluates the frozen old policy on B, continues training from the old weights on B, and evaluates the adapted policy. The RL algorithm has been enhanced with an entropy bonus for better exploration, and retrieval now uses semantic embeddings by default. The experiment runner automatically calculates a composite score comparing the old and adapted policies on KB B to definitively approve or decline the model's recovery performance.
