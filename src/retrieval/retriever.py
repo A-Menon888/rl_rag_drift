@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import numpy as np
-from .embeddings import Embedder
+from .embeddings import get_cached_embedder
 
 @dataclass
 class RetrievalResult:
@@ -13,11 +13,11 @@ class Retriever:
         facts,
         embedder=None,
         use_faiss=False,
-        use_semantic_embeddings=False,
+        use_semantic_embeddings=True,
         embedding_model="all-MiniLM-L6-v2",
         allow_embedding_fallback=True,
     ):
-        self.embedder = embedder or Embedder(
+        self.embedder = embedder or get_cached_embedder(
             model_name=embedding_model,
             use_model=use_semantic_embeddings,
             allow_fallback=allow_embedding_fallback,

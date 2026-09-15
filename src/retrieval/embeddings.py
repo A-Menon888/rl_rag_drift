@@ -1,5 +1,9 @@
 import hashlib
+import logging
 import numpy as np
+
+logger = logging.getLogger(__name__)
+_EMBEDDER_CACHE = {}
 
 class Embedder:
     def __init__(self, model_name="all-MiniLM-L6-v2", dimension=384, use_model=True, allow_fallback=True):
@@ -9,6 +13,7 @@ class Embedder:
         self.allow_fallback = allow_fallback
         self.model = None
         self.load_error = None
+        self._text_cache = {}
         if use_model:
             try:
                 from sentence_transformers import SentenceTransformer
@@ -20,6 +25,11 @@ class Embedder:
                         f"Unable to load requested sentence-transformers model '{model_name}'. "
                         "Install its dependencies/model or set allow_embedding_fallback: true."
                     ) from error
+                logger.warning(
+                    "Unable to load sentence-transformers model '%s'; using hashed-fallback embeddings: %s",
+                    model_name,
+                    error,
+                )
 
     @property
     def backend(self) -> str:
@@ -35,15 +45,34 @@ class Embedder:
         }
 
     def encode(self, texts):
-        if self.model is not None:
-            return np.asarray(self.model.encode(texts, normalize_embeddings=True), dtype="float32")
-        vectors = np.zeros((len(texts), self.dimension), dtype="float32")
-        for row, text in enumerate(texts):
-            for token in text.lower().split():
-                digest = hashlib.sha256(token.encode()).digest()
-                index = int.from_bytes(digest[:4], "little") % self.dimension
-                vectors[row, index] += 1
-            norm = np.linalg.norm(vectors[row])
-            if norm:
-                vectors[row] /= norm
-        return vectors
+        texts = list(texts)
+        missing = list(dict.fromkeys(text for text in texts if text not in self._text_cache))
+        if missing:
+            if self.model is not None:
+                new_vectors = np.asarray(
+                    self.model.encode(missing, normalize_embeddings=True), dtype="float32"
+                )
+            else:
+                new_vectors = np.zeros((len(missing), self.dimension), dtype="float32")
+                for row, text in enumerate(missing):
+                    for token in text.lower().split():
+                        digest = hashlib.sha256(token.encode()).digest()
+                        index = int.from_bytes(digest[:4], "little") % self.dimension
+                        new_vectors[row, index] += 1
+                    norm = np.linalg.norm(new_vectors[row])
+                    if norm:
+                        new_vectors[row] /= norm
+            self._text_cache.update(zip(missing, new_vectors))
+        return np.asarray([self._text_cache[text] for text in texts], dtype="float32")
+
+
+def get_cached_embedder(model_name="all-MiniLM-L6-v2", dimension=384, use_model=True, allow_fallback=True):
+    key = (model_name, dimension, use_model, allow_fallback)
+    if key not in _EMBEDDER_CACHE:
+        _EMBEDDER_CACHE[key] = Embedder(
+            model_name=model_name,
+            dimension=dimension,
+            use_model=use_model,
+            allow_fallback=allow_fallback,
+        )
+    return _EMBEDDER_CACHE[key]
