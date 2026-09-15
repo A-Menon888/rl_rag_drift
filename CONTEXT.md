@@ -193,4 +193,4 @@ The current suite contains 20 tests, including chunk metadata, explicit KB selec
 - Repeated seeds, per-step logs, recovery-time analysis, and richer plots remain future work.
 - Multi-seed aggregate infrastructure is implemented; the current 10-seed run is measurement infrastructure, not a scientific conclusion about margin selection.
 
-Do not claim that adaptation improves KB-B performance until the generated evaluation CSV and deterministic comparison support that conclusion. Preserve the separation between policy, action, environment, retrieval, generation, and cache state.
+Do not claim that adaptation improves KB-B performance until the generated evaluation CSV and deterministic comparison support that conclusion.Preserve the separation between policy, action, environment, retrieval, generation, and cache state..
