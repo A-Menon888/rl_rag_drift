@@ -1,6 +1,25 @@
 import csv, json, os, sys
 from pathlib import Path
 import yaml
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.data.documents import generate_document_queries, load_knowledge_base
 from src.environment.rl_rag_env import RLRAGEnv
@@ -51,17 +70,42 @@ def result_row(policy_name, knowledge_base, metrics, training_average_reward="")
             "training_average_reward": training_average_reward, **metrics}
 
 
-def main():
-    with open(ROOT / "configs/default.yaml", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle)
-    os.makedirs(ROOT / "results/metrics", exist_ok=True)
-    os.makedirs(ROOT / "results/checkpoints", exist_ok=True)
-    os.makedirs(ROOT / "results/figures", exist_ok=True)
+def approval_decision(candidate, baseline, margin=0.0):
+    """Approve when accuracy clears the baseline bar and cost stays bounded."""
+    accuracy_bar = baseline["accuracy"] - margin
+    cost_bar = baseline["retrieval_cost"] + margin
+    approved = candidate["accuracy"] > accuracy_bar and candidate["retrieval_cost"] <= cost_bar
+    return {
+        "approved": approved,
+        "baseline_accuracy": baseline["accuracy"],
+        "baseline_retrieval_cost": baseline["retrieval_cost"],
+        "accuracy_bar": accuracy_bar,
+        "retrieval_cost_bar": cost_bar,
+    }
+
+
+def recovery_decision(candidate, pre_drift_baseline):
+    """Recovery means matching or exceeding the old policy's KB-A accuracy."""
+    baseline_accuracy = pre_drift_baseline["accuracy"]
+    return {
+        "recovered": candidate["accuracy"] >= baseline_accuracy,
+        "baseline_accuracy": baseline_accuracy,
+    }
+
+
+def run_experiment(config, output_root=ROOT / "results", summary_path=None):
+    output_root = Path(output_root)
+    summary_path = Path(summary_path) if summary_path else output_root / "metrics" / "summary.csv"
+    os.makedirs(output_root / "metrics", exist_ok=True)
+    os.makedirs(output_root / "checkpoints", exist_ok=True)
+    os.makedirs(output_root / "figures", exist_ok=True)
 
     # --- Load both KBs and generate aligned queries together ---
     kb_a_chunks = load_knowledge_base(ROOT / config["corpus_dir"], "kb_a")
     kb_b_chunks = load_knowledge_base(ROOT / config["corpus_dir"], "kb_b")
-    queries_a, queries_b = generate_document_queries(kb_a_chunks, kb_b_chunks)
+    queries_a, queries_b = generate_document_queries(
+        kb_a_chunks, kb_b_chunks, seed=config["seed"]
+    )
 
     snapshots_a = {0: kb_a_chunks}
     snapshots_b = {0: kb_b_chunks}
@@ -73,7 +117,7 @@ def main():
     old_policy = RLAgent(11, config["learning_rate"], config["seed"])
     train_a_env = make_env(queries_a, snapshots_a, config)
     training_average_reward = train_policy(old_policy, train_a_env, config["train_episodes"])
-    torch.save(old_policy.policy.state_dict(), ROOT / "results/checkpoints/rl_old_policy_kb_a.pt")
+    torch.save(old_policy.policy.state_dict(), output_root / "checkpoints/rl_old_policy_kb_a.pt")
 
     for policy_name, kb_label, policy, queries, snapshots in [
         ("old_policy", "kb_a", old_policy, queries_a, snapshots_a),
@@ -87,7 +131,7 @@ def main():
         ))
         plot_series(
             [item["average_reward"] for item in history],
-            ROOT / f"results/figures/{policy_name}_{kb_label}_reward.png",
+            output_root / f"figures/{policy_name}_{kb_label}_reward.png",
             "Reward", f"{policy_name} on {kb_label}",
         )
 
@@ -96,13 +140,13 @@ def main():
     adapted_policy.policy.load_state_dict(old_policy.policy.state_dict())
     train_b_env = make_env(queries_b, snapshots_b, config)
     adapted_training_reward = train_policy(adapted_policy, train_b_env, config["train_episodes"])
-    torch.save(adapted_policy.policy.state_dict(), ROOT / "results/checkpoints/rl_adapted_policy_kb_b.pt")
+    torch.save(adapted_policy.policy.state_dict(), output_root / "checkpoints/rl_adapted_policy_kb_b.pt")
     eval_b_env = make_env(queries_b, snapshots_b, config)
     adapted_history = evaluate_policy(adapted_policy, eval_b_env)
     all_rows.append(result_row("adapted_policy", "kb_b", adapted_history[-1], adapted_training_reward))
     plot_series(
         [item["average_reward"] for item in adapted_history],
-        ROOT / "results/figures/adapted_policy_kb_b_reward.png",
+        output_root / "figures/adapted_policy_kb_b_reward.png",
         "Reward", "adapted_policy on kb_b",
     )
 
@@ -110,13 +154,13 @@ def main():
     retrain_policy = RLAgent(11, config["learning_rate"], config["seed"])
     retrain_b_env = make_env(queries_b, snapshots_b, config)
     retrain_training_reward = train_policy(retrain_policy, retrain_b_env, config["train_episodes"])
-    torch.save(retrain_policy.policy.state_dict(), ROOT / "results/checkpoints/rl_full_retrain_policy_kb_b.pt")
+    torch.save(retrain_policy.policy.state_dict(), output_root / "checkpoints/rl_full_retrain_policy_kb_b.pt")
     eval_retrain_env = make_env(queries_b, snapshots_b, config)
     retrain_history = evaluate_policy(retrain_policy, eval_retrain_env)
     all_rows.append(result_row("full_retrain_policy", "kb_b", retrain_history[-1], retrain_training_reward))
     plot_series(
         [item["average_reward"] for item in retrain_history],
-        ROOT / "results/figures/full_retrain_policy_kb_b_reward.png",
+        output_root / "figures/full_retrain_policy_kb_b_reward.png",
         "Reward", "full_retrain_policy on kb_b",
     )
 
@@ -135,13 +179,18 @@ def main():
             all_rows.append(result_row(policy_name, kb_label, history[-1]))
             plot_series(
                 [item["average_reward"] for item in history],
-                ROOT / f"results/figures/{policy_name}_{kb_label}_reward.png",
+                output_root / f"figures/{policy_name}_{kb_label}_reward.png",
                 "Reward", f"{policy_name} on {kb_label}",
             )
 
-    # ── Automated approval: 3-way KB-B comparison ────────────────────────────
+    # ── Baseline-relative approval and recovery decisions ────────────────────
     kb_b_rows = {r["policy"]: r for r in all_rows if r["knowledge_base"] == "kb_b"
                  and r["policy"] in {"old_policy", "adapted_policy", "full_retrain_policy"}}
+    always_retrieve_b = next(r for r in all_rows
+                             if r["policy"] == "always_retrieve" and r["knowledge_base"] == "kb_b")
+    old_policy_a = next(r for r in all_rows
+                        if r["policy"] == "old_policy" and r["knowledge_base"] == "kb_a")
+    approval_margin = config.get("approval_margin", 0.0)
 
     print("\n--- Automated Evaluation on KB-B (3-way) ---")
     for label in ["old_policy", "adapted_policy", "full_retrain_policy"]:
@@ -158,33 +207,52 @@ def main():
     adap_b = kb_b_rows.get("adapted_policy", {})
     ret_b  = kb_b_rows.get("full_retrain_policy", {})
 
-    def approval_score(row, baseline):
-        return ((row.get("accuracy", 0) - baseline.get("accuracy", 0)) * 10.0
-                + (row.get("average_reward", 0) - baseline.get("average_reward", 0)) * 1.0
-                - (row.get("retrieval_cost", 0) - baseline.get("retrieval_cost", 0)) * 1.0)
+    decisions = {
+        "adapted_policy": approval_decision(adap_b, always_retrieve_b, approval_margin),
+        "full_retrain_policy": approval_decision(ret_b, always_retrieve_b, approval_margin),
+    }
+    print(f"\n  Approval baseline (always_retrieve/kb_b): accuracy={always_retrieve_b['accuracy']:.3f} "
+          f"retrieval_cost={always_retrieve_b['retrieval_cost']:.3f} margin={approval_margin:.3f}")
+    for label, decision in decisions.items():
+        row = kb_b_rows[label]
+        print(f"  {label:<26} accuracy={row['accuracy']:.3f} "
+              f"cost={row['retrieval_cost']:.3f} -> "
+              f"{'APPROVED' if decision['approved'] else 'DECLINED'}")
 
-    adap_score   = approval_score(adap_b, old_b)
-    retrain_score = approval_score(ret_b, old_b)
-    print(f"\n  Adapted   vs old_policy: score={adap_score:.3f}  "
-          f"-> {'APPROVED' if adap_score > 0 else 'DECLINED'}")
-    print(f"  Retrained vs old_policy: score={retrain_score:.3f}  "
-          f"-> {'APPROVED' if retrain_score > 0 else 'DECLINED'}\n")
+    recovery = {
+        label: recovery_decision(row, old_policy_a)
+        for label, row in kb_b_rows.items()
+    }
+    print(f"  Recovery baseline (old_policy/kb_a): accuracy={old_policy_a['accuracy']:.3f}")
+    for label, decision in recovery.items():
+        print(f"  {label:<26} recovery="
+              f"{'RECOVERED' if decision['recovered'] else 'NOT_RECOVERED'}")
 
     for row in all_rows:
-        if row["policy"] == "adapted_policy" and row["knowledge_base"] == "kb_b":
-            row["approval_status"] = "APPROVED" if adap_score > 0 else "DECLINED"
-        elif row["policy"] == "full_retrain_policy" and row["knowledge_base"] == "kb_b":
-            row["approval_status"] = "APPROVED" if retrain_score > 0 else "DECLINED"
+        row["approval_baseline_accuracy"] = always_retrieve_b["accuracy"]
+        row["approval_baseline_retrieval_cost"] = always_retrieve_b["retrieval_cost"]
+        row["recovery_baseline_accuracy"] = old_policy_a["accuracy"]
+        if row["policy"] in decisions and row["knowledge_base"] == "kb_b":
+            row["approval_status"] = "APPROVED" if decisions[row["policy"]]["approved"] else "DECLINED"
+            row["recovery_status"] = "RECOVERED" if recovery[row["policy"]]["recovered"] else "NOT_RECOVERED"
         else:
             row["approval_status"] = "N/A"
+            row["recovery_status"] = "N/A"
 
-    with open(ROOT / "results/metrics/summary.csv", "w", newline="", encoding="utf-8") as handle:
+    with open(summary_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(all_rows[0].keys()))
         writer.writeheader()
         writer.writerows(all_rows)
-    with open(ROOT / "results/metrics/config.json", "w", encoding="utf-8") as handle:
+    with open(summary_path.parent / "config.json", "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
-    print(f"Wrote {len(all_rows)} result rows to results/metrics/summary.csv")
+    print(f"Wrote {len(all_rows)} result rows to {summary_path}")
+    return all_rows
+
+
+def main():
+    with open(ROOT / "configs/default.yaml", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    run_experiment(config)
 
 
 if __name__ == "__main__":

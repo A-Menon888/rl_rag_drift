@@ -4,7 +4,7 @@ import torch
 from src.data.documents import generate_document_queries, load_knowledge_base
 from src.environment.rl_rag_env import RLRAGEnv
 from src.agents.rl_agent import RLAgent
-from experiments.run_all import evaluate_policy, train_policy
+from experiments.run_all import approval_decision, evaluate_policy, recovery_decision, train_policy
 
 CORPUS = Path(__file__).parents[1] / "data" / "documentation"
 
@@ -131,3 +131,18 @@ def test_full_retrain_produces_checkpoint_and_summary_row(tmp_path):
     row = history[0]
     assert 0.0 <= row["accuracy"] <= 1.0
     assert "average_reward" in row
+
+
+def test_approval_bar_tracks_always_retrieve_baseline():
+    candidate = {"accuracy": 0.80, "retrieval_cost": 0.10}
+    strong_baseline = {"accuracy": 0.90, "retrieval_cost": 0.10}
+    weak_baseline = {"accuracy": 0.70, "retrieval_cost": 0.10}
+
+    assert approval_decision(candidate, strong_baseline, margin=0.0)["approved"] is False
+    assert approval_decision(candidate, weak_baseline, margin=0.0)["approved"] is True
+
+
+def test_recovery_uses_old_policy_kb_a_accuracy():
+    candidate = {"accuracy": 0.85}
+    assert recovery_decision(candidate, {"accuracy": 0.85})["recovered"] is True
+    assert recovery_decision(candidate, {"accuracy": 0.90})["recovered"] is False

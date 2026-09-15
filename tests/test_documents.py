@@ -47,6 +47,22 @@ def test_kb_b_has_some_drifted_and_some_stable_queries():
     assert len(stable)  >= 1, "KB-B must have at least one stable (unchanged) query"
 
 
+def test_query_phrasing_is_seeded_and_preserves_alignment():
+    kb_a = load_knowledge_base(CORPUS, "kb_a")
+    kb_b = load_knowledge_base(CORPUS, "kb_b")
+    queries_a_1, queries_b_1 = generate_document_queries(kb_a, kb_b, seed=1)
+    queries_a_2, queries_b_2 = generate_document_queries(kb_a, kb_b, seed=2)
+    queries_a_1_repeat, queries_b_1_repeat = generate_document_queries(kb_a, kb_b, seed=1)
+
+    assert [query.text for query in queries_a_1] == [query.text for query in queries_a_1_repeat]
+    assert [query.text for query in queries_b_1] == [query.text for query in queries_b_1_repeat]
+    assert [query.text for query in queries_a_1] != [query.text for query in queries_a_2]
+    for first, second in zip(queries_a_1, queries_b_1):
+        assert first.query_id == second.query_id
+        assert first.memorized_answer == second.memorized_answer
+        assert second.current_answer in {chunk.text for chunk in kb_b}
+
+
 def test_retrieval_returns_document_chunk_metadata():
     chunks = load_knowledge_base(CORPUS, "kb_a")
     result = Retriever(chunks).search("How long do authentication access tokens last?", 1)[0]
@@ -62,15 +78,15 @@ def test_knowledge_base_selection_is_explicit():
     assert {chunk.text for chunk in kb_a} != {chunk.text for chunk in kb_b}
 
 
-def test_chunk_count_mismatch_raises_loudly(tmp_path):
-    """If a file in kb_b has a different paragraph count than kb_a, fail clearly."""
-    import shutil
-    # Create a minimal mismatched corpus
+def test_chunk_count_mismatch_is_aligned_without_failing(tmp_path):
+    """Inserted or deleted chunks must not abort A/B query generation."""
     (tmp_path / "kb_a").mkdir()
     (tmp_path / "kb_b").mkdir()
     (tmp_path / "kb_a" / "doc.md").write_text("# Title\n\nParagraph one.\n\nParagraph two.")
-    (tmp_path / "kb_b" / "doc.md").write_text("# Title\n\nParagraph one only.")
+    (tmp_path / "kb_b" / "doc.md").write_text("# Title\n\nParagraph one.\n\nInserted paragraph.\n\nParagraph two.")
     ka = load_knowledge_base(tmp_path, "kb_a")
     kb = load_knowledge_base(tmp_path, "kb_b")
-    with pytest.raises(ValueError, match="Chunk count mismatch"):
-        generate_document_queries(ka, kb)
+    queries_a, queries_b = generate_document_queries(ka, kb)
+    assert len(queries_a) == len(ka)
+    assert len(queries_b) == len(ka)
+    assert [query.current_answer for query in queries_b] == [chunk.text for chunk in ka]

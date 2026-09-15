@@ -11,5 +11,5 @@ learning_rate: 0.001
 retrieval_cost: 0.10
 correct_reward: 1.0
 incorrect_reward: -1.0
-recovery_threshold: 0.90
+approval_margin: 0.0
 rolling_window: 30
