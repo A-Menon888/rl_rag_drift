@@ -29,6 +29,26 @@ tests/test_documents.py        Document and retrieval tests
 tests/test_env.py              Environment, evaluation, and training tests
 ```
 
+## Where to work first
+
+Use this path when making changes:
+
+1. **Queries and drift pairing:** start with `src/data/documents.py`. `load_documents()` creates chunks; `generate_document_queries()` aligns KB-A/KB-B chunks, assigns stable query IDs, marks `affected_by_drift`, and selects seeded query wording. Do not change `memorized_answer`, `current_answer`, or IDs when experimenting with phrasing.
+2. **Observation and environment behavior:** read `src/environment/rl_rag_env.py`. `_state()` builds the 11-value policy input; `step()` executes DIRECT/RETRIEVE, computes correctness/reward, updates the cache, and returns `info`. This is the control point for feature engineering, not `rl_agent.py`.
+3. **RL logic:** read `src/agents/rl_agent.py`. `PolicyNetwork` defines the input/output shape; `RLAgent.act()` selects actions; `train_episode()` collects one episode; `update()` performs REINFORCE. Change this only when changing the learning algorithm itself.
+4. **Accuracy and metrics:** read `src/evaluation/metrics.py`. `summarize()` calculates accuracy, average reward, retrieval rate/cost, and drifted/stable accuracy from environment `info` records. `retrieval_diagnostics()` is for ranking analysis and is separate from policy evaluation.
+5. **Experiment wiring and decisions:** read `experiments/run_all.py`. `run_experiment()` creates the A/B environments, trains/evaluates old/adapted/retrained policies, runs baselines, and writes `summary.csv`. `approval_decision()` compares candidates to `always_retrieve/kb_b`; `recovery_decision()` compares KB-B candidates to `old_policy/kb_a`.
+6. **Repeated seeds:** read `experiments/run_seeds.py`. It overrides `config["seed"]` for each run, which controls RL initialization/action randomness and query-template selection, writes per-seed summaries, and aggregates metrics. It reuses `run_experiment()` rather than duplicating the benchmark.
+7. **Experiment knobs:** edit `configs/default.yaml`. `seed`, `top_k`, `train_episodes`, `learning_rate`, `retrieval_cost`, and `approval_margin` are active runner inputs. `correct_reward` and `incorrect_reward` are documented settings but are not currently forwarded by `make_env()`.
+
+For an RL or accuracy change, the usual reading order is:
+`documents.py` -> `rl_rag_env.py` -> `rl_agent.py` -> `metrics.py` -> `run_all.py` -> the matching test file.
+
+For a seed/query change, use:
+`documents.py` -> `run_all.py` -> `run_seeds.py` -> `test_documents.py`.
+
+The generated files under `results/` are outputs, not source of truth. Recreate them with `.venv\Scripts\python.exe experiments/run_all.py` or `.venv\Scripts\python.exe experiments/run_seeds.py --n-seeds 10`.
+
 ## Active documentation corpus
 
 Both snapshots currently contain the same three documentation files, but their chunk counts may differ after content growth or formatting changes. With the current corpus and default 80-word chunking, KB-A has 157 chunks and KB-B has 159 chunks:
@@ -193,4 +213,15 @@ The current suite contains 20 tests, including chunk metadata, explicit KB selec
 - Repeated seeds, per-step logs, recovery-time analysis, and richer plots remain future work.
 - Multi-seed aggregate infrastructure is implemented; the current 10-seed run is measurement infrastructure, not a scientific conclusion about margin selection.
 
-Do not claim that adaptation improves KB-B performance until the generated evaluation CSV and deterministic comparison support that conclusion.Preserve the separation between policy, action, environment, retrieval, generation, and cache state..
+Do not claim that adaptation improves KB-B performance until the generated evaluation CSV and deterministic comparison support that conclusion. Preserve the separation between policy, action, environment, retrieval, generation, and cache state.
+
+The important files are now clearly mapped:
+
+Queries, chunk alignment, drift flags: documents.py
+Observation, actions, cache, reward flow: rl_rag_env.py
+Policy network and REINFORCE training: rl_agent.py
+Accuracy and metric calculations: metrics.py
+Main experiment wiring and approval/recovery decisions: run_all.py
+Ten-seed execution and aggregation: run_seeds.py
+Active experiment settings: default.yaml
+Relevant tests: test_documents.py and test_env.py
