@@ -1,0 +1,98 @@
+{
+  "analysis": {
+    "n_seeds": 3,
+    "per_seed_accuracy_pairs": [
+      {
+        "seed": 0,
+        "old_policy_accuracy": 0.4968152866242038,
+        "adapted_policy_accuracy": 0.89171974522293,
+        "full_retrain_policy_accuracy": 0.910828025477707,
+        "difference_full_minus_adapted": 0.019108280254777066
+      },
+      {
+        "seed": 1,
+        "old_policy_accuracy": 0.5031847133757962,
+        "adapted_policy_accuracy": 0.8980891719745223,
+        "full_retrain_policy_accuracy": 0.89171974522293,
+        "difference_full_minus_adapted": -0.006369426751592355
+      },
+      {
+        "seed": 2,
+        "old_policy_accuracy": 0.5095541401273885,
+        "adapted_policy_accuracy": 0.8407643312101911,
+        "full_retrain_policy_accuracy": 0.8535031847133758,
+        "difference_full_minus_adapted": 0.01273885350318471
+      }
+    ],
+    "mean_old_policy_kb_b_accuracy": 0.5031847133757962,
+    "mean_adapted_policy_kb_b_accuracy": 0.8768577494692145,
+    "mean_full_retrain_policy_kb_b_accuracy": 0.8853503184713376,
+    "recovery_ratio": 0.9777777777777777,
+    "recovery_ratio_note": null,
+    "mean_paired_difference": 0.00849256900212314,
+    "std_paired_difference": 0.013259019104879824,
+    "standard_error": 0.007655098249392757,
+    "z_value": 1.96,
+    "tau": 0.015003992568809804,
+    "cohens_d_paired": 0.6405126152203485,
+    "absolute_effect_size_bin": "medium",
+    "decision": "adaptation statistically equivalent to full retrain",
+    "unusual_adaptation_better_edge_case": false,
+    "minimum_detectable_effect": {
+      "standardized": 3.2640435496996933,
+      "accuracy": 0.04327801578462799,
+      "alpha": 0.05,
+      "power": 0.8
+    },
+    "query_bootstrap": {
+      "resamples": 200,
+      "confidence": 0.95,
+      "per_seed": [
+        {
+          "seed": 0,
+          "n_queries": 157,
+          "adapted_interval": [
+            0.8407643312101911,
+            0.9426751592356688
+          ],
+          "adapted_interval_width": 0.10191082802547768,
+          "full_retrain_interval": [
+            0.8660828025477707,
+            0.9554140127388535
+          ],
+          "full_retrain_interval_width": 0.08933121019108281
+        },
+        {
+          "seed": 1,
+          "n_queries": 157,
+          "adapted_interval": [
+            0.8471337579617835,
+            0.9426751592356688
+          ],
+          "adapted_interval_width": 0.09554140127388533,
+          "full_retrain_interval": [
+            0.8343949044585988,
+            0.9426751592356688
+          ],
+          "full_retrain_interval_width": 0.10828025477707004
+        },
+        {
+          "seed": 2,
+          "n_queries": 157,
+          "adapted_interval": [
+            0.7896496815286624,
+            0.8918789808917198
+          ],
+          "adapted_interval_width": 0.10222929936305736,
+          "full_retrain_interval": [
+            0.7961783439490446,
+            0.9046178343949045
+          ],
+          "full_retrain_interval_width": 0.10843949044585988
+        }
+      ],
+      "mean_adapted_interval_width": 0.09989384288747345,
+      "mean_full_retrain_interval_width": 0.10201698513800424
+    }
+  }
+}

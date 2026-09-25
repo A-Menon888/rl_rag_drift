@@ -4,13 +4,13 @@ import torch
 from torch import nn
 
 class PolicyNetwork(nn.Module):
-    def __init__(self, state_size=11, actions=2):
+    def __init__(self, state_size=388, actions=2):
         super().__init__()
         self.net = nn.Sequential(nn.Linear(state_size, 32), nn.Tanh(), nn.Linear(32, actions))
     def forward(self, state): return self.net(state)
 
 class RLAgent:
-    def __init__(self, state_size=11, learning_rate=0.01, seed=7):
+    def __init__(self, state_size=388, learning_rate=0.01, seed=7):
         random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
         self.policy = PolicyNetwork(state_size)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=learning_rate)

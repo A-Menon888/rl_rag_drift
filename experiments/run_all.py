@@ -40,8 +40,9 @@ def make_env(queries, snapshots, config, seed=None):
     )
 
 
-def run_policy(policy, env, episodes, deterministic=False):
+def run_policy(policy, env, episodes, deterministic=False, return_last_infos=False):
     history = []
+    last_infos = []
     for _ in range(episodes):
         obs, _ = env.reset()
         infos = []
@@ -50,11 +51,17 @@ def run_policy(policy, env, episodes, deterministic=False):
             obs, _, _, _, info = env.step(action)
             infos.append(info)
         history.append(summarize(infos))
-    return history
+        last_infos = infos
+    return (history, last_infos) if return_last_infos else history
 
 
 def evaluate_policy(policy, env, episodes=3):
     return run_policy(policy, env, episodes, deterministic=True)
+
+
+def evaluate_policy_with_records(policy, env, episodes=3):
+    """Return summaries and final-episode records for auditable query analysis."""
+    return run_policy(policy, env, episodes, deterministic=True, return_last_infos=True)
 
 
 def train_policy(policy, env, episodes):
@@ -106,15 +113,25 @@ def run_experiment(config, output_root=ROOT / "results", summary_path=None):
     queries_a, queries_b = generate_document_queries(
         kb_a_chunks, kb_b_chunks, seed=config["seed"]
     )
+    print(
+        "Query counts: "
+        f"KB-A total={len(queries_a)} "
+        f"drifted={sum(query.affected_by_drift for query in queries_a)} "
+        f"stable={sum(not query.affected_by_drift for query in queries_a)}; "
+        f"KB-B total={len(queries_b)} "
+        f"drifted={sum(query.affected_by_drift for query in queries_b)} "
+        f"stable={sum(not query.affected_by_drift for query in queries_b)}"
+    )
 
     snapshots_a = {0: kb_a_chunks}
     snapshots_b = {0: kb_b_chunks}
 
     all_rows = []
+    kb_b_evaluation_infos = {}
     import torch
 
     # ── Arm 1: Old policy trained on KB-A ────────────────────────────────────
-    old_policy = RLAgent(11, config["learning_rate"], config["seed"])
+    old_policy = RLAgent(388, config["learning_rate"], config["seed"])
     train_a_env = make_env(queries_a, snapshots_a, config)
     training_average_reward = train_policy(old_policy, train_a_env, config["train_episodes"])
     torch.save(old_policy.policy.state_dict(), output_root / "checkpoints/rl_old_policy_kb_a.pt")
@@ -124,7 +141,9 @@ def run_experiment(config, output_root=ROOT / "results", summary_path=None):
         ("old_policy", "kb_b", old_policy, queries_b, snapshots_b),
     ]:
         env = make_env(queries, snapshots, config)
-        history = evaluate_policy(policy, env)
+        history, infos = evaluate_policy_with_records(policy, env)
+        if kb_label == "kb_b":
+            kb_b_evaluation_infos[policy_name] = infos
         all_rows.append(result_row(
             policy_name, kb_label, history[-1],
             training_average_reward if kb_label == "kb_a" else "",
@@ -136,13 +155,14 @@ def run_experiment(config, output_root=ROOT / "results", summary_path=None):
         )
 
     # ── Arm 2: Adapted policy — starts from old weights, trains on KB-B ──────
-    adapted_policy = RLAgent(11, config["learning_rate"], config["seed"])
+    adapted_policy = RLAgent(388, config["learning_rate"], config["seed"])
     adapted_policy.policy.load_state_dict(old_policy.policy.state_dict())
     train_b_env = make_env(queries_b, snapshots_b, config)
     adapted_training_reward = train_policy(adapted_policy, train_b_env, config["train_episodes"])
     torch.save(adapted_policy.policy.state_dict(), output_root / "checkpoints/rl_adapted_policy_kb_b.pt")
     eval_b_env = make_env(queries_b, snapshots_b, config)
-    adapted_history = evaluate_policy(adapted_policy, eval_b_env)
+    adapted_history, adapted_infos = evaluate_policy_with_records(adapted_policy, eval_b_env)
+    kb_b_evaluation_infos["adapted_policy"] = adapted_infos
     all_rows.append(result_row("adapted_policy", "kb_b", adapted_history[-1], adapted_training_reward))
     plot_series(
         [item["average_reward"] for item in adapted_history],
@@ -151,12 +171,13 @@ def run_experiment(config, output_root=ROOT / "results", summary_path=None):
     )
 
     # ── Arm 3: Full retrain from scratch on KB-B ─────────────────────────────
-    retrain_policy = RLAgent(11, config["learning_rate"], config["seed"])
+    retrain_policy = RLAgent(388, config["learning_rate"], config["seed"])
     retrain_b_env = make_env(queries_b, snapshots_b, config)
     retrain_training_reward = train_policy(retrain_policy, retrain_b_env, config["train_episodes"])
     torch.save(retrain_policy.policy.state_dict(), output_root / "checkpoints/rl_full_retrain_policy_kb_b.pt")
     eval_retrain_env = make_env(queries_b, snapshots_b, config)
-    retrain_history = evaluate_policy(retrain_policy, eval_retrain_env)
+    retrain_history, retrain_infos = evaluate_policy_with_records(retrain_policy, eval_retrain_env)
+    kb_b_evaluation_infos["full_retrain_policy"] = retrain_infos
     all_rows.append(result_row("full_retrain_policy", "kb_b", retrain_history[-1], retrain_training_reward))
     plot_series(
         [item["average_reward"] for item in retrain_history],
@@ -243,9 +264,35 @@ def run_experiment(config, output_root=ROOT / "results", summary_path=None):
         writer = csv.DictWriter(handle, fieldnames=list(all_rows[0].keys()))
         writer.writeheader()
         writer.writerows(all_rows)
+    query_results_path = summary_path.parent / "kb_b_query_results.csv"
+    paired_policy_names = ("old_policy", "adapted_policy", "full_retrain_policy")
+    query_ids_by_policy = {
+        name: [info["query_id"] for info in kb_b_evaluation_infos[name]]
+        for name in paired_policy_names
+    }
+    if len({tuple(ids) for ids in query_ids_by_policy.values()}) != 1:
+        raise RuntimeError("KB-B policy evaluations did not use the same query ordering")
+    query_rows = []
+    for index, query in enumerate(queries_b):
+        row = {
+            "seed": config["seed"],
+            "query_index": index,
+            "query_id": query.query_id,
+            "affected_by_drift": query.affected_by_drift,
+        }
+        for name in paired_policy_names:
+            info = kb_b_evaluation_infos[name][index]
+            row[f"{name}_correct"] = int(bool(info["correct"]))
+            row[f"{name}_action"] = int(info["action"])
+        query_rows.append(row)
+    with open(query_results_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(query_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(query_rows)
     with open(summary_path.parent / "config.json", "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
     print(f"Wrote {len(all_rows)} result rows to {summary_path}")
+    print(f"Wrote {len(query_rows)} paired KB-B query rows to {query_results_path}")
     return all_rows
 
 

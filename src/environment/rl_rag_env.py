@@ -16,7 +16,7 @@ class RLRAGEnv(gym.Env):
         self.incorrect_reward = incorrect_reward
         self.top_k = top_k
         self.action_space = spaces.Discrete(2)
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(11,), dtype=np.float32)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(388,), dtype=np.float32)
         self.generator = MockAnswerGenerator()
         self.t = 0
         self.recent_rewards = []
@@ -26,7 +26,7 @@ class RLRAGEnv(gym.Env):
         self.retriever = Retriever(self.snapshots[0])
 
     def _state(self, query):
-        embedding = self.retriever.embedder.encode([query.text])[0][:7]
+        embedding = self.retriever.embedder.encode([query.text])[0]
         cache_available = float(query.query_id in self.cache)
         return np.concatenate([
             embedding,

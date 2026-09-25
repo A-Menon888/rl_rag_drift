@@ -1,0 +1,14 @@
+seed: 7
+corpus_dir: data/documentation
+knowledge_bases: [kb_a, kb_b]
+top_k: 3
+use_semantic_embeddings: true
+embedding_model: all-MiniLM-L6-v2
+allow_embedding_fallback: false
+train_episodes: 150
+learning_rate: 0.001
+retrieval_cost: 0.50
+correct_reward: 1.0
+incorrect_reward: -1.0
+approval_margin: 0.0
+rolling_window: 30

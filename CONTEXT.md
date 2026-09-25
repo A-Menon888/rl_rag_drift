@@ -15,6 +15,7 @@ configs/default.yaml           Experiment configuration
 data/documentation/kb_a/*.md   Original documentation snapshot
 data/documentation/kb_b/*.md   Changed documentation snapshot
 experiments/run_all.py         Training, evaluation, plots, CSV, checkpoints
+experiments/analyze_adaptation.py Paired seed analysis, power, bootstrap, control validation
 src/data/documents.py          Markdown loader, chunker, KB pairing, query builder
 src/data/generator.py          Shared Query record and compatibility answer method
 src/retrieval/embeddings.py    Hashed-token or optional sentence-transformer embeddings
@@ -34,7 +35,7 @@ tests/test_env.py              Environment, evaluation, and training tests
 Use this path when making changes:
 
 1. **Queries and drift pairing:** start with `src/data/documents.py`. `load_documents()` creates chunks; `generate_document_queries()` aligns KB-A/KB-B chunks, assigns stable query IDs, marks `affected_by_drift`, and selects seeded query wording. Do not change `memorized_answer`, `current_answer`, or IDs when experimenting with phrasing.
-2. **Observation and environment behavior:** read `src/environment/rl_rag_env.py`. `_state()` builds the 11-value policy input; `step()` executes DIRECT/RETRIEVE, computes correctness/reward, updates the cache, and returns `info`. This is the control point for feature engineering, not `rl_agent.py`.
+2. **Observation and environment behavior:** read `src/environment/rl_rag_env.py`. `_state()` builds the 388-value policy input; `step()` executes DIRECT/RETRIEVE, computes correctness/reward, updates the cache, and returns `info`. This is the control point for feature engineering, not `rl_agent.py`.
 3. **RL logic:** read `src/agents/rl_agent.py`. `PolicyNetwork` defines the input/output shape; `RLAgent.act()` selects actions; `train_episode()` collects one episode; `update()` performs REINFORCE. Change this only when changing the learning algorithm itself.
 4. **Accuracy and metrics:** read `src/evaluation/metrics.py`. `summarize()` calculates accuracy, average reward, retrieval rate/cost, and drifted/stable accuracy from environment `info` records. `retrieval_diagnostics()` is for ranking analysis and is separate from policy evaluation.
 5. **Experiment wiring and decisions:** read `experiments/run_all.py`. `run_experiment()` creates the A/B environments, trains/evaluates old/adapted/retrained policies, runs baselines, and writes `summary.csv`. `approval_decision()` compares candidates to `always_retrieve/kb_b`; `recovery_decision()` compares KB-B candidates to `old_policy/kb_a`.
@@ -85,7 +86,7 @@ text, document_id, source, title, chunk_id
 documentation query
         |
         v
-11-value observation
+388-value observation
         |
         v
 policy chooses DIRECT (0) or RETRIEVE (1)
@@ -120,7 +121,7 @@ Embedding instances are shared by configuration and cache vectors by input text.
 `RLRAGEnv(queries, snapshots, drift_events=None, ...)` has:
 
 - Actions: `0 = DIRECT`, `1 = RETRIEVE`.
-- Observation shape `(11,)`: the first seven dimensions of the current query embedding, latest reward, mean retrieval frequency over the last 20 actions, database version, and cache availability.
+- Observation shape `(388,)`: the full 384-dimensional current-query embedding, latest reward, mean retrieval frequency over the last 20 actions, database version, and cache availability.
 - Reward defaults: correct `+1.0`, incorrect `-1.0`, and retrieval cost `0.10`, so correct retrieval is `+0.9` and incorrect retrieval is `-1.1`.
 
 `reset()` clears time, recent history, database version, cache, and recreates the retriever from `snapshots[0]`. `step()` uses the query at `t % len(queries)`, retrieves only for action 1, generates an answer, compares it with `current_answer`, caches only correct retrievals, records reward/cost/history, and returns `(observation, reward, False, False, info)`. Episodes are ended by the caller after `len(env.queries)` steps; the environment itself never returns terminated or truncated as true.
@@ -129,7 +130,7 @@ The `drift_events` argument is accepted for compatibility but is not used. The a
 
 ## RL and baseline policies
 
-`PolicyNetwork` is `Linear(11, 32) -> Tanh -> Linear(32, 2)`. `RLAgent.act()` samples a categorical action during exploration and chooses the argmax when `explore=False`.
+`PolicyNetwork` is `Linear(388, 32) -> Tanh -> Linear(32, 2)`. `RLAgent.act()` samples a categorical action during exploration and chooses the argmax when `explore=False`.
 
 `train_episode()` collects log probabilities, rewards, and entropies for one externally sized episode. `update()` computes discounted returns with `gamma=0.99`, normalizes them when there is more than one return, applies an entropy bonus (`entropy_coef=0.05`), and updates the Adam optimizer once. This is REINFORCE, not PPO; there is no critic or replay buffer.
 
@@ -140,6 +141,7 @@ Baselines are `AlwaysDirect`, `AlwaysRetrieve`, and seeded `RandomPolicy`. The r
 `experiments/run_all.py`:
 
 1. Loads KB-A and KB-B and creates aligned query pairs.
+   It prints total, drifted, and stable query counts for each KB immediately after query generation.
 2. Trains `old_policy` on KB-A for `train_episodes` and saves `rl_old_policy_kb_a.pt`.
 3. Evaluates the old policy deterministically on KB-A and KB-B.
 4. Copies old weights into `adapted_policy`, trains it on KB-B, and saves `rl_adapted_policy_kb_b.pt`.
@@ -158,12 +160,22 @@ The `always_retrieve` KB-B row is the same-run approval baseline. `approval_marg
 
 The runner writes 10 CSV rows: old policy on A/B, adapted policy on B, full retrain on B, and three baselines on A/B. Each row contains `accuracy`, `average_reward`, `retrieval_rate`, `retrieval_cost`, drifted/stable accuracy fields, `training_average_reward` for trained RL rows, `approval_baseline_accuracy`, `approval_baseline_retrieval_cost`, `recovery_baseline_accuracy`, `approval_status`, and `recovery_status`. Evaluation metrics are computed from actual `info` records by `summarize()`.
 
-`experiments/run_seeds.py` reuses `run_experiment()` for independent deterministic seeds. `--n-seeds` defaults to 10 and `--base-seed` defaults to 0; each seed writes `results/metrics/seed_<seed>/summary.csv`, checkpoints, figures, and config. It also writes `results/metrics/aggregate_summary.csv`, containing mean, sample standard deviation, minimum, maximum, and JSON raw per-seed values for accuracy, average reward, retrieval rate, retrieval cost, drifted accuracy, and stable accuracy. It prints mean +/- standard deviation for accuracy and retrieval rate and checks seeded IDs/memorized answers. The checker currently flags empty answers, so deletion cases require that checker to be revisited even though the query generator intentionally represents deleted KB-A chunks with empty KB-B answers.
+The 2026-09-21 default diagnostic run after switching the observation from seven truncated embedding values to the full 384-dimensional embedding produced 157 paired queries. KB-A had 0 drifted/157 stable queries; KB-B had 79 drifted/78 stable queries. On KB-B, old/adapted/full-retrain accuracy was `0.5032`/`0.8344`/`0.8153`, and retrieval rate was `0.0318`/`0.7898`/`0.8344`. Always-retrieve accuracy was `0.7516`, so retrieval is no longer perfect on the expanded corpus. These single-seed results are not directly comparable to the older 10-seed aggregate generated from the smaller eight-query corpus.
+
+`experiments/run_seeds.py` reuses `run_experiment()` for independent deterministic seeds. `--config` selects the YAML configuration, `--n-seeds` defaults to 10, and `--base-seed` defaults to 0; `--jobs` optionally runs independent seeds in separate processes without changing their seed configuration, and `--resume` reuses a seed only when both its summary and paired query sidecar exist. Each seed writes `results/metrics/seed_<seed>/summary.csv`, checkpoints, figures, and config. It also writes `results/metrics/aggregate_summary.csv`, containing mean, sample standard deviation, minimum, maximum, and JSON raw per-seed values for accuracy, average reward, retrieval rate, retrieval cost, drifted accuracy, and stable accuracy. It prints mean +/- standard deviation for accuracy and retrieval rate and checks seeded IDs/memorized answers. The checker currently flags empty answers, so deletion cases require that checker to be revisited even though the query generator intentionally represents deleted KB-A chunks with empty KB-B answers.
+
+`configs/control_high_cost.yaml` is an explicit reduced validation control with 150 training episodes and retrieval cost 0.50; keep its outputs isolated from default metrics.
+
+Adapted and full-retrain evaluation within a seed use the same `queries_b` object and deterministic ordering. Each seed now also writes `kb_b_query_results.csv`, a sidecar containing paired per-query correctness and action fields for the old, adapted, and full-retrain policies; the existing summary schemas are unchanged. `run_seeds.py` accepts `--output-root` for isolated runs and `--retrieval-cost` for explicit control experiments.
+
+`experiments/analyze_adaptation.py` reads `aggregate_summary.csv` plus the authoritative per-seed summaries and query-result sidecars. It reports the recovery ratio, full-retrain-minus-adapted paired accuracy differences, the configurable `z_value * SE` decision threshold, paired Cohen's d and magnitude bin, an exact two-sided paired-t minimum detectable effect at configurable alpha/power, and diagnostic within-seed query-bootstrap interval widths. It can compare a prefix such as 10 seeds with a 30-seed analysis and validate a separate adversarial control directory. The seed is the inferential unit; query bootstrap output does not affect the decision.
 
 Outputs:
 
 - `results/metrics/summary.csv`
 - `results/metrics/config.json`
+- `results/metrics/adaptation_analysis.json`
+- `results/metrics/seed_<seed>/kb_b_query_results.csv`
 - reward plots under `results/figures/`
 - PyTorch checkpoints under `results/checkpoints/`
 
@@ -198,6 +210,8 @@ From the repository root:
 $env:PYTHONPATH='.'
 python -m pytest -q tests
 python experiments/run_all.py
+python experiments/run_seeds.py --n-seeds 30 --jobs 4 --resume
+python experiments/analyze_adaptation.py --n-seeds 30 --compare-n-seeds 10
 ```
 
 The current suite contains 20 tests, including chunk metadata, explicit KB selection, seeded query phrasing, drift pairing, unequal-count alignment, retrieval metadata, environment behavior, caching, deterministic RL evaluation metrics, frozen evaluation, adaptation weight updates, approval/recovery decisions, and full-retrain smoke behavior.

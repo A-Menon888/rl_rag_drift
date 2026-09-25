@@ -19,7 +19,7 @@ def test_environment_step_contract():
     kb_a, _, queries_a, _ = _make_queries()
     env = RLRAGEnv(queries_a, {0: kb_a})
     observation, info = env.reset()
-    assert observation.shape == (11,)
+    assert observation.shape == (388,)
     _, reward, terminated, truncated, step_info = env.step(0)
     assert isinstance(reward, float)
     assert not terminated and not truncated
@@ -90,7 +90,7 @@ def test_retrieval_caches_result_for_later_direct_action():
 def test_rl_evaluation_returns_computed_metrics():
     kb_a, _, queries_a, _ = _make_queries()
     env = RLRAGEnv(queries_a[:2], {0: kb_a})
-    summary = evaluate_policy(RLAgent(11, learning_rate=0.001, seed=3), env, episodes=1)[0]
+    summary = evaluate_policy(RLAgent(388, learning_rate=0.001, seed=3), env, episodes=1)[0]
     assert {"accuracy", "average_reward", "retrieval_rate", "retrieval_cost"} <= summary.keys()
     assert 0.0 <= summary["accuracy"] <= 1.0
     assert 0.0 <= summary["retrieval_rate"] <= 1.0
@@ -99,7 +99,7 @@ def test_rl_evaluation_returns_computed_metrics():
 def test_evaluating_old_policy_does_not_update_weights():
     kb_a, _, queries_a, _ = _make_queries()
     env = RLRAGEnv(queries_a[:2], {0: kb_a})
-    policy = RLAgent(11, learning_rate=0.001, seed=3)
+    policy = RLAgent(388, learning_rate=0.001, seed=3)
     before = {name: value.detach().clone() for name, value in policy.policy.state_dict().items()}
     evaluate_policy(policy, env, episodes=1)
     after = policy.policy.state_dict()
@@ -108,9 +108,9 @@ def test_evaluating_old_policy_does_not_update_weights():
 
 def test_adaptation_starts_from_old_weights_and_updates_on_kb_b():
     kb_a, kb_b, queries_a, queries_b = _make_queries()
-    old_policy = RLAgent(11, learning_rate=0.001, seed=3)
+    old_policy = RLAgent(388, learning_rate=0.001, seed=3)
     train_policy(old_policy, RLRAGEnv(queries_a, {0: kb_a}), episodes=1)
-    adapted = RLAgent(11, learning_rate=0.001, seed=4)
+    adapted = RLAgent(388, learning_rate=0.001, seed=4)
     adapted.policy.load_state_dict(old_policy.policy.state_dict())
     before = {name: value.detach().clone() for name, value in adapted.policy.state_dict().items()}
     train_policy(adapted, RLRAGEnv(queries_b, {0: kb_b}), episodes=1)
@@ -122,7 +122,7 @@ def test_full_retrain_produces_checkpoint_and_summary_row(tmp_path):
     """Smoke test: full-retrain arm trains, saves a checkpoint, and its metrics are valid."""
     import copy
     kb_a, kb_b, queries_a, queries_b = _make_queries()
-    retrain = RLAgent(11, learning_rate=0.001, seed=7)
+    retrain = RLAgent(388, learning_rate=0.001, seed=7)
     env = RLRAGEnv(queries_b, {0: kb_b})
     train_policy(retrain, env, episodes=2)
     eval_env = RLRAGEnv(queries_b, {0: kb_b})
