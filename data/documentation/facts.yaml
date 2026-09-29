@@ -1,0 +1,273 @@
+# Fact-level ground truth for the documentation corpus.
+#
+# Each fact names ONE answer slot on its owning reference page (`source`).
+# Values are never written here: `pattern` (exactly one capture group) is
+# applied to every snapshot, so
+#   memory answer = value on the KB-0 page (what the frozen generator saw),
+#   gold answer   = value on the evaluated KB's page (absent => unanswerable),
+#   drift type    = computed by comparing the KB-A and KB-B values.
+# The owning page is authoritative. The same slot stated with a different
+# value on another page (e.g. an out-of-date FAQ) is a contradiction.
+#
+# Questions are written by hand, must not contain any value of the fact,
+# and are what the policy and retriever see.
+#
+# Facts whose pattern matches no snapshot are "absent": plausible questions
+# the documentation never answers. The correct behaviour is GIVE_UP.
+
+facts:
+  # ── payments.md ──────────────────────────────────────────────────────────
+  - id: payments.create_endpoint
+    source: payments.md
+    pattern: 'Create a payment with POST (\S+)\.'
+    questions:
+      - Which endpoint do I call to create a new payment?
+      - What path is used to submit a payment charge?
+
+  - id: payments.amount_unit
+    source: payments.md
+    pattern: 'Payment amounts are represented in (\w+)'
+    questions:
+      - In what unit are payment amounts expressed?
+      - Should I send payment amounts in whole dollars or some smaller unit?
+
+  - id: payments.default_currency
+    source: payments.md
+    pattern: 'The default currency is ([A-Z]{3})'
+    questions:
+      - Which currency is applied when a payment request does not specify one?
+      - What is the fallback currency for payments?
+
+  - id: payments.max_amount
+    source: payments.md
+    pattern: 'The maximum payment amount is (\d+ cents)'
+    questions:
+      - What is the largest amount a single payment can be?
+      - Is there an upper limit on the size of a payment?
+
+  - id: payments.manual_review_threshold
+    source: payments.md
+    pattern: 'Payments above (\d+ cents) require manual review'
+    questions:
+      - Above what amount does a payment need manual review?
+      - When does the risk team have to approve a payment before it is captured?
+
+  - id: payments.idempotency_requirement
+    source: payments.md
+    pattern: 'Payment requests (\w+) idempotency keys'
+    questions:
+      - Are idempotency keys optional or mandatory on payment requests?
+      - Do payment requests have to include an idempotency key?
+
+  - id: payments.idempotency_ttl
+    source: payments.md
+    pattern: 'Idempotency keys are valid for (\d+ hours)'
+    questions:
+      - How long does an idempotency key remain valid?
+      - For how long can I retry a payment with the same idempotency key?
+
+  - id: payments.failure_status
+    source: payments.md
+    pattern: 'Payment failures return HTTP (\d{3})'
+    questions:
+      - Which HTTP status code does a failed payment return?
+      - What status code signals that a payment could not be processed?
+
+  - id: payments.create_status
+    source: payments.md
+    pattern: 'Successful payment creation returns HTTP (\d{3})'
+    questions:
+      - What status code is returned when a payment is created successfully?
+      - Which HTTP code confirms that a new payment was created?
+
+  - id: payments.refund_endpoint
+    source: payments.md
+    pattern: 'Refund requests use POST (\S+)\.'
+    questions:
+      - Which endpoint issues a refund for a payment?
+      - How do administrators trigger a payment refund through the API?
+
+  - id: payments.refund_window
+    source: payments.md
+    pattern: 'Refunds can be requested within (\d+ days)'
+    questions:
+      - How long after completion can a payment still be refunded?
+      - Is there a time limit for requesting a refund?
+
+  - id: payments.webhook_retries
+    source: payments.md
+    pattern: 'Failed webhooks are retried up to (\d+ times)'
+    questions:
+      - How many times is a failed webhook delivery retried?
+      - What is the retry limit for payment webhooks?
+
+  # ── users.md ─────────────────────────────────────────────────────────────
+  - id: users.create_endpoint
+    source: users.md
+    pattern: 'Create a user with POST (\S+)\.'
+    questions:
+      - Which endpoint creates a new user account?
+      - What path do I send a request to when registering a user?
+
+  - id: users.update_method
+    source: users.md
+    pattern: 'Update a user with ([A-Z]+) '
+    questions:
+      - Which HTTP method is used to update an existing user?
+      - What verb should I use to modify a user record?
+
+  - id: users.id_type
+    source: users.md
+    pattern: 'The user identifier is an? (\w+)'
+    questions:
+      - What data type is a user's identifier?
+      - What kind of value identifies a user record?
+
+  - id: users.email_case
+    source: users.md
+    pattern: 'Email addresses are stored in (\w+)'
+    questions:
+      - How is letter case handled when user emails are stored?
+      - Does the API normalise the case of stored email addresses?
+
+  - id: users.password_min_length
+    source: users.md
+    pattern: 'Passwords must be at least (\d+) characters'
+    questions:
+      - What is the minimum password length for users?
+      - How short can a user's password be?
+
+  - id: users.default_status
+    source: users.md
+    pattern: 'The default account status is (\w+)'
+    questions:
+      - What status does a newly created account start with?
+      - Which account status is assigned by default?
+
+  - id: users.missing_status
+    source: users.md
+    pattern: 'Missing users return HTTP (\d{3})'
+    questions:
+      - What status code comes back when a user does not exist?
+      - Which error is returned for an unknown user ID?
+
+  - id: users.deletion_kind
+    source: users.md
+    pattern: 'User deletion is (\w+)'
+    questions:
+      - What happens to a user account once it is deleted, is it gone for good?
+      - Can an administrator undo the deletion of a user?
+
+  - id: users.restore_window
+    source: users.md
+    pattern: 'Deleted users can be restored within (\d+ days)'
+    questions:
+      - How long do administrators have to restore a deleted user?
+      - Within what period can a deleted account be recovered?
+
+  - id: users.default_page_size
+    source: users.md
+    pattern: 'The default page size is (\d+) users'
+    questions:
+      - How many users does a listing page return by default?
+      - What page size is used for user listings when I do not specify one?
+
+  - id: users.max_page_size
+    source: users.md
+    pattern: 'The maximum page size is (\d+) users'
+    questions:
+      - What is the largest page size allowed for user listings?
+      - How many users can I request per page at most?
+
+  - id: users.listing_rate_limit
+    source: users.md
+    pattern: 'User listings are limited to (\d+ requests per minute)'
+    questions:
+      - What is the rate limit on the user listing endpoint?
+      - How many user listing calls can a client make each minute?
+
+  # ── authentication.md (Django auth reference) ───────────────────────────
+  - id: auth.username_max_length
+    source: authentication.md
+    pattern: 'username Required\. (\d+) characters or fewer'
+    questions:
+      - What is the maximum length of a Django username?
+      - How many characters can the username field hold?
+
+  - id: auth.first_name_max_length
+    source: authentication.md
+    pattern: 'first_name Optional \(blank=True\)\. (\d+) characters or fewer'
+    questions:
+      - How long can a user's first_name be?
+      - What is the character limit on the first name field of the User model?
+
+  - id: auth.last_name_max_length
+    source: authentication.md
+    pattern: 'last_name Optional \(blank=True\)\. (\d+) characters or fewer'
+    questions:
+      - How long can a user's last_name be?
+      - What is the character limit on the last name field of the User model?
+
+  - id: auth.permission_name_max_length
+    source: authentication.md
+    pattern: "(\\d+) characters or fewer\\. Example: 'Can vote'"
+    questions:
+      - What is the maximum length of a Permission's name field?
+      - How many characters are allowed in a permission name?
+
+  - id: auth.codename_max_length
+    source: authentication.md
+    pattern: "(\\d+) characters or fewer\\. Example: 'can_vote'"
+    questions:
+      - How long can a permission codename be?
+      - What is the length limit for Permission.codename?
+
+  - id: auth.group_name_max_length
+    source: authentication.md
+    pattern: '(\d+) characters or fewer\. Any characters are permitted'
+    questions:
+      - What is the maximum length of a Group name?
+      - How many characters can a group's name contain?
+
+  - id: auth.create_unknown_user_default
+    source: authentication.md
+    pattern: 'if not already in the database\.? Defaults to (\w+)'
+    questions:
+      - Does RemoteUserBackend create unknown users automatically unless configured otherwise?
+      - What is the default value of create_unknown_user?
+
+  - id: auth.session_idle_timeout
+    source: authentication.md
+    pattern: 'session expires after (\d+ seconds)'
+    questions:
+      - How long can a logged-in user stay idle before the session expires?
+      - After how much inactivity is a user logged out?
+
+  - id: auth.dev_port
+    source: authentication.md
+    pattern: 'typically run on port (\d+)'
+    questions:
+      - Which port does the authentication service use in local development?
+      - What port should I expect the auth service on when running it locally?
+
+  # ── never documented (absent in every snapshot) ─────────────────────────
+  - id: payments.partial_refunds
+    source: payments.md
+    pattern: 'Partial refunds are (\w+)'
+    questions:
+      - Can I refund only part of a payment?
+      - Does the Payments API support refunding a fraction of the original amount?
+
+  - id: users.avatar_size_limit
+    source: users.md
+    pattern: 'Avatar images must be smaller than (\d+ \w+)'
+    questions:
+      - What is the maximum size for a user's avatar upload?
+      - How large can a profile picture be?
+
+  - id: auth.lockout_threshold
+    source: authentication.md
+    pattern: 'locked after (\d+) failed login attempts'
+    questions:
+      - How many failed logins lock a user account?
+      - After how many wrong passwords is a user locked out?

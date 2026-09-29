@@ -13,13 +13,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from experiments.run_all import run_experiment
-from src.data.documents import generate_document_queries, load_knowledge_base
+from src.data.documents import load_knowledge_base
+from src.data.facts import build_fact_queries, load_facts
 
 METRICS = (
     "accuracy",
     "average_reward",
+    "average_searches",
     "retrieval_rate",
     "retrieval_cost",
+    "unnecessary_retrieval_rate",
+    "give_up_rate",
     "drifted_accuracy",
     "stable_accuracy",
 )
@@ -66,22 +70,20 @@ def write_csv(path, rows):
 
 
 def alignment_issues(config):
+    """Queries are seed-independent; check KB-A/KB-B pairing once."""
     corpus = ROOT / config["corpus_dir"]
-    kb_a = load_knowledge_base(corpus, "kb_a")
-    kb_b = load_knowledge_base(corpus, "kb_b")
+    queries_a, queries_b = build_fact_queries(
+        load_facts(ROOT / config["facts_path"]),
+        *(load_knowledge_base(corpus, name) for name in ("kb_0", "kb_a", "kb_b")),
+    )
+    by_id_b = {query.query_id: query for query in queries_b}
     issues = []
-    for seed in range(config["base_seed"], config["base_seed"] + config["n_seeds"]):
-        queries_a, queries_b = generate_document_queries(kb_a, kb_b, seed=seed)
-        if len(queries_a) != len(queries_b):
-            issues.append((seed, "query count mismatch"))
-            continue
-        for query_a, query_b in zip(queries_a, queries_b):
-            if query_a.query_id != query_b.query_id:
-                issues.append((seed, f"query ID mismatch: {query_a.query_id}/{query_b.query_id}"))
-            if query_a.memorized_answer != query_b.memorized_answer:
-                issues.append((seed, f"memorized answer mismatch: {query_a.query_id}"))
-            if not query_a.current_answer or not query_b.current_answer:
-                issues.append((seed, f"empty answer: {query_a.query_id}"))
+    for query_a in queries_a:
+        query_b = by_id_b.get(query_a.query_id)
+        if query_b is None:
+            issues.append(("all", f"KB-A query missing from KB-B: {query_a.query_id}"))
+        elif query_a.memory_answer != query_b.memory_answer:
+            issues.append(("all", f"memory answer mismatch: {query_a.query_id}"))
     return issues
 
 

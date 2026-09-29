@@ -1,80 +1,71 @@
 import csv, json, os, sys
 from pathlib import Path
+import numpy as np
+import torch
 import yaml
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.data.documents import generate_document_queries, load_knowledge_base
+from src.data.documents import load_knowledge_base
+from src.data.facts import build_fact_queries, describe_queries, load_facts
 from src.environment.rl_rag_env import RLRAGEnv
-from src.agents.baselines import AlwaysDirect, AlwaysRetrieve, RandomPolicy
+from src.agents.baselines import AnswerDirectly, RandomPolicy, SearchThenAnswer
 from src.agents.rl_agent import RLAgent
 from src.evaluation.metrics import summarize
 from src.evaluation.plots import plot_series
 
 ROOT = Path(__file__).resolve().parents[1]
+TRAINED_POLICIES = ("old_policy", "adapted_policy", "full_retrain_policy")
+APPROVAL_BASELINE = "search_once"
 
 
-def make_env(queries, snapshots, config, seed=None):
+def make_env(queries, chunks, config):
     return RLRAGEnv(
-        queries, snapshots, {},
-        seed=seed if seed is not None else config["seed"],
-        retrieval_cost=config["retrieval_cost"],
+        queries, chunks,
         top_k=config["top_k"],
+        max_searches=config["max_searches"],
+        search_cost=config["retrieval_cost"],
+        correct_reward=config["correct_reward"],
+        incorrect_reward=config["incorrect_reward"],
+        give_up_reward=config["give_up_reward"],
     )
 
 
-def run_policy(policy, env, episodes, deterministic=False, return_last_infos=False):
-    history = []
-    last_infos = []
-    for _ in range(episodes):
-        obs, _ = env.reset()
+def make_agent(env, config):
+    return RLAgent(env.observation_space.shape[0], config["learning_rate"], config["seed"],
+                   entropy_coef=config["entropy_coef"])
+
+
+def evaluate_policy(policy, env, explore=False):
+    """Run every question once, in order; return (summary, terminal infos)."""
+    infos = []
+    for index in range(len(env.queries)):
+        observation, info = env.reset(options={"query_index": index})
+        terminated = False
+        while not terminated:
+            observation, _, terminated, _, info = env.step(policy.act(observation, info, explore=explore))
+        infos.append(info)
+    return summarize(infos), infos
+
+
+def train_policy(policy, env, epochs, batch_size, seed):
+    """Each epoch visits every question once in a seeded random order.
+
+    Returns the mean training episode return of each epoch.
+    """
+    rng = np.random.default_rng(seed)
+    curve = []
+    for _ in range(epochs):
+        order = rng.permutation(len(env.queries))
         infos = []
-        for _ in range(len(env.queries)):
-            action = policy.act(obs, explore=False) if deterministic else policy.act(obs)
-            obs, _, _, _, info = env.step(action)
-            infos.append(info)
-        history.append(summarize(infos))
-        last_infos = infos
-    return (history, last_infos) if return_last_infos else history
+        for start in range(0, len(order), batch_size):
+            infos += policy.train_batch(env, order[start:start + batch_size].tolist())
+        curve.append(summarize(infos)["average_reward"])
+    return curve
 
 
-def evaluate_policy(policy, env, episodes=3):
-    return run_policy(policy, env, episodes, deterministic=True)
-
-
-def evaluate_policy_with_records(policy, env, episodes=3):
-    """Return summaries and final-episode records for auditable query analysis."""
-    return run_policy(policy, env, episodes, deterministic=True, return_last_infos=True)
-
-
-def train_policy(policy, env, episodes):
-    rewards = []
-    for _ in range(episodes):
-        infos, _ = policy.train_episode(env)
-        rewards.append(summarize(infos)["average_reward"])
-    return sum(rewards) / len(rewards)
-
-
-def result_row(policy_name, knowledge_base, metrics, training_average_reward=""):
+def result_row(policy_name, knowledge_base, metrics, training_final_return=""):
     return {"policy": policy_name, "knowledge_base": knowledge_base,
-            "training_average_reward": training_average_reward, **metrics}
+            "training_final_return": training_final_return, **metrics}
 
 
 def approval_decision(candidate, baseline, margin=0.0):
@@ -103,188 +94,121 @@ def recovery_decision(candidate, pre_drift_baseline):
 def run_experiment(config, output_root=ROOT / "results", summary_path=None):
     output_root = Path(output_root)
     summary_path = Path(summary_path) if summary_path else output_root / "metrics" / "summary.csv"
-    os.makedirs(output_root / "metrics", exist_ok=True)
-    os.makedirs(output_root / "checkpoints", exist_ok=True)
-    os.makedirs(output_root / "figures", exist_ok=True)
+    for sub in ("metrics", "checkpoints", "figures"):
+        os.makedirs(output_root / sub, exist_ok=True)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # --- Load both KBs and generate aligned queries together ---
-    kb_a_chunks = load_knowledge_base(ROOT / config["corpus_dir"], "kb_a")
-    kb_b_chunks = load_knowledge_base(ROOT / config["corpus_dir"], "kb_b")
-    queries_a, queries_b = generate_document_queries(
-        kb_a_chunks, kb_b_chunks, seed=config["seed"]
+    # --- Load the memory snapshot and both KBs; build fact-level queries ---
+    kb_0_chunks, kb_a_chunks, kb_b_chunks = (
+        load_knowledge_base(ROOT / config["corpus_dir"], name) for name in ("kb_0", "kb_a", "kb_b")
     )
-    print(
-        "Query counts: "
-        f"KB-A total={len(queries_a)} "
-        f"drifted={sum(query.affected_by_drift for query in queries_a)} "
-        f"stable={sum(not query.affected_by_drift for query in queries_a)}; "
-        f"KB-B total={len(queries_b)} "
-        f"drifted={sum(query.affected_by_drift for query in queries_b)} "
-        f"stable={sum(not query.affected_by_drift for query in queries_b)}"
+    queries_a, queries_b = build_fact_queries(
+        load_facts(ROOT / config["facts_path"]), kb_0_chunks, kb_a_chunks, kb_b_chunks
     )
+    for label, queries in (("KB-A", queries_a), ("KB-B", queries_b)):
+        print(f"{label} queries={len(queries)} {describe_queries(queries)}")
 
-    snapshots_a = {0: kb_a_chunks}
-    snapshots_b = {0: kb_b_chunks}
+    env_a = make_env(queries_a, kb_a_chunks, config)
+    env_b = make_env(queries_b, kb_b_chunks, config)
+    epochs, batch_size, seed = config["train_epochs"], config["batch_size"], config["seed"]
 
     all_rows = []
-    kb_b_evaluation_infos = {}
-    import torch
+    kb_b_infos = {}
 
-    # ── Arm 1: Old policy trained on KB-A ────────────────────────────────────
-    old_policy = RLAgent(388, config["learning_rate"], config["seed"])
-    train_a_env = make_env(queries_a, snapshots_a, config)
-    training_average_reward = train_policy(old_policy, train_a_env, config["train_episodes"])
-    torch.save(old_policy.policy.state_dict(), output_root / "checkpoints/rl_old_policy_kb_a.pt")
+    def train_and_record(name, agent, env, kb_label):
+        curve = train_policy(agent, env, epochs, batch_size, seed)
+        torch.save(agent.policy.state_dict(), output_root / f"checkpoints/rl_{name}_{kb_label}.pt")
+        plot_series(curve, output_root / f"figures/{name}_{kb_label}_training.png",
+                    "Mean episode return", f"{name} training on {kb_label}")
+        return curve[-1]
 
-    for policy_name, kb_label, policy, queries, snapshots in [
-        ("old_policy", "kb_a", old_policy, queries_a, snapshots_a),
-        ("old_policy", "kb_b", old_policy, queries_b, snapshots_b),
-    ]:
-        env = make_env(queries, snapshots, config)
-        history, infos = evaluate_policy_with_records(policy, env)
+    # ── Arm 1: Old policy trained on KB-A, then frozen ───────────────────────
+    old_policy = make_agent(env_a, config)
+    old_final_return = train_and_record("old_policy", old_policy, env_a, "kb_a")
+    for kb_label, env in (("kb_a", env_a), ("kb_b", env_b)):
+        metrics, infos = evaluate_policy(old_policy, env)
         if kb_label == "kb_b":
-            kb_b_evaluation_infos[policy_name] = infos
-        all_rows.append(result_row(
-            policy_name, kb_label, history[-1],
-            training_average_reward if kb_label == "kb_a" else "",
-        ))
-        plot_series(
-            [item["average_reward"] for item in history],
-            output_root / f"figures/{policy_name}_{kb_label}_reward.png",
-            "Reward", f"{policy_name} on {kb_label}",
-        )
+            kb_b_infos["old_policy"] = infos
+        all_rows.append(result_row("old_policy", kb_label, metrics, old_final_return if kb_label == "kb_a" else ""))
 
     # ── Arm 2: Adapted policy — starts from old weights, trains on KB-B ──────
-    adapted_policy = RLAgent(388, config["learning_rate"], config["seed"])
+    adapted_policy = make_agent(env_b, config)
     adapted_policy.policy.load_state_dict(old_policy.policy.state_dict())
-    train_b_env = make_env(queries_b, snapshots_b, config)
-    adapted_training_reward = train_policy(adapted_policy, train_b_env, config["train_episodes"])
-    torch.save(adapted_policy.policy.state_dict(), output_root / "checkpoints/rl_adapted_policy_kb_b.pt")
-    eval_b_env = make_env(queries_b, snapshots_b, config)
-    adapted_history, adapted_infos = evaluate_policy_with_records(adapted_policy, eval_b_env)
-    kb_b_evaluation_infos["adapted_policy"] = adapted_infos
-    all_rows.append(result_row("adapted_policy", "kb_b", adapted_history[-1], adapted_training_reward))
-    plot_series(
-        [item["average_reward"] for item in adapted_history],
-        output_root / "figures/adapted_policy_kb_b_reward.png",
-        "Reward", "adapted_policy on kb_b",
-    )
+    adapted_final_return = train_and_record("adapted_policy", adapted_policy, env_b, "kb_b")
 
     # ── Arm 3: Full retrain from scratch on KB-B ─────────────────────────────
-    retrain_policy = RLAgent(388, config["learning_rate"], config["seed"])
-    retrain_b_env = make_env(queries_b, snapshots_b, config)
-    retrain_training_reward = train_policy(retrain_policy, retrain_b_env, config["train_episodes"])
-    torch.save(retrain_policy.policy.state_dict(), output_root / "checkpoints/rl_full_retrain_policy_kb_b.pt")
-    eval_retrain_env = make_env(queries_b, snapshots_b, config)
-    retrain_history, retrain_infos = evaluate_policy_with_records(retrain_policy, eval_retrain_env)
-    kb_b_evaluation_infos["full_retrain_policy"] = retrain_infos
-    all_rows.append(result_row("full_retrain_policy", "kb_b", retrain_history[-1], retrain_training_reward))
-    plot_series(
-        [item["average_reward"] for item in retrain_history],
-        output_root / "figures/full_retrain_policy_kb_b_reward.png",
-        "Reward", "full_retrain_policy on kb_b",
-    )
+    retrain_policy = make_agent(env_b, config)
+    retrain_final_return = train_and_record("full_retrain_policy", retrain_policy, env_b, "kb_b")
+
+    for name, agent, final_return in (("adapted_policy", adapted_policy, adapted_final_return),
+                                      ("full_retrain_policy", retrain_policy, retrain_final_return)):
+        metrics, kb_b_infos[name] = evaluate_policy(agent, env_b)
+        all_rows.append(result_row(name, "kb_b", metrics, final_return))
 
     # ── Baselines ─────────────────────────────────────────────────────────────
-    for policy_name, policy in {
-        "always_direct": AlwaysDirect(),
-        "always_retrieve": AlwaysRetrieve(),
-        "random": RandomPolicy(config["seed"]),
-    }.items():
-        for kb_label, queries, snapshots in [
-            ("kb_a", queries_a, snapshots_a),
-            ("kb_b", queries_b, snapshots_b),
-        ]:
-            env = make_env(queries, snapshots, config)
-            history = run_policy(policy, env, 3)
-            all_rows.append(result_row(policy_name, kb_label, history[-1]))
-            plot_series(
-                [item["average_reward"] for item in history],
-                output_root / f"figures/{policy_name}_{kb_label}_reward.png",
-                "Reward", f"{policy_name} on {kb_label}",
-            )
+    baselines = {
+        "answer_directly": AnswerDirectly(),
+        "search_once": SearchThenAnswer(1),
+        "search_all": SearchThenAnswer(config["max_searches"]),
+        "random": RandomPolicy(seed),
+    }
+    for name, policy in baselines.items():
+        for kb_label, env in (("kb_a", env_a), ("kb_b", env_b)):
+            all_rows.append(result_row(name, kb_label, evaluate_policy(policy, env, explore=True)[0]))
 
     # ── Baseline-relative approval and recovery decisions ────────────────────
-    kb_b_rows = {r["policy"]: r for r in all_rows if r["knowledge_base"] == "kb_b"
-                 and r["policy"] in {"old_policy", "adapted_policy", "full_retrain_policy"}}
-    always_retrieve_b = next(r for r in all_rows
-                             if r["policy"] == "always_retrieve" and r["knowledge_base"] == "kb_b")
-    old_policy_a = next(r for r in all_rows
-                        if r["policy"] == "old_policy" and r["knowledge_base"] == "kb_a")
+    rows = {(r["policy"], r["knowledge_base"]): r for r in all_rows}
+    approval_baseline = rows[(APPROVAL_BASELINE, "kb_b")]
+    old_policy_a = rows[("old_policy", "kb_a")]
     approval_margin = config.get("approval_margin", 0.0)
 
-    print("\n--- Automated Evaluation on KB-B (3-way) ---")
-    for label in ["old_policy", "adapted_policy", "full_retrain_policy"]:
-        r = kb_b_rows.get(label, {})
-        da = r.get("drifted_accuracy")
-        sa = r.get("stable_accuracy")
-        da_str = f"{da:.3f}" if da is not None else "N/A"
-        sa_str = f"{sa:.3f}" if sa is not None else "N/A"
-        print(f"  {label:<26} Acc={r.get('accuracy', 0):.3f}  "
-              f"Reward={r.get('average_reward', 0):.3f}  "
-              f"Drifted={da_str}  Stable={sa_str}")
+    print("\n--- Evaluation on KB-B (3-way) ---")
+    for name in TRAINED_POLICIES:
+        r = rows[(name, "kb_b")]
+        print(f"  {name:<22} Acc={r['accuracy']:.3f} Return={r['average_reward']:.3f} "
+              f"Searches={r['average_searches']:.2f} GiveUp={r['give_up_rate']:.3f} "
+              f"Drifted={r['drifted_accuracy']:.3f} Stable={r['stable_accuracy']:.3f}")
 
-    old_b  = kb_b_rows.get("old_policy", {})
-    adap_b = kb_b_rows.get("adapted_policy", {})
-    ret_b  = kb_b_rows.get("full_retrain_policy", {})
-
-    decisions = {
-        "adapted_policy": approval_decision(adap_b, always_retrieve_b, approval_margin),
-        "full_retrain_policy": approval_decision(ret_b, always_retrieve_b, approval_margin),
-    }
-    print(f"\n  Approval baseline (always_retrieve/kb_b): accuracy={always_retrieve_b['accuracy']:.3f} "
-          f"retrieval_cost={always_retrieve_b['retrieval_cost']:.3f} margin={approval_margin:.3f}")
-    for label, decision in decisions.items():
-        row = kb_b_rows[label]
-        print(f"  {label:<26} accuracy={row['accuracy']:.3f} "
-              f"cost={row['retrieval_cost']:.3f} -> "
-              f"{'APPROVED' if decision['approved'] else 'DECLINED'}")
-
-    recovery = {
-        label: recovery_decision(row, old_policy_a)
-        for label, row in kb_b_rows.items()
-    }
+    decisions = {name: approval_decision(rows[(name, "kb_b")], approval_baseline, approval_margin)
+                 for name in ("adapted_policy", "full_retrain_policy")}
+    recovery = {name: recovery_decision(rows[(name, "kb_b")], old_policy_a) for name in TRAINED_POLICIES}
+    print(f"\n  Approval baseline ({APPROVAL_BASELINE}/kb_b): accuracy={approval_baseline['accuracy']:.3f} "
+          f"retrieval_cost={approval_baseline['retrieval_cost']:.3f} margin={approval_margin:.3f}")
+    for name, decision in decisions.items():
+        print(f"  {name:<22} -> {'APPROVED' if decision['approved'] else 'DECLINED'}")
     print(f"  Recovery baseline (old_policy/kb_a): accuracy={old_policy_a['accuracy']:.3f}")
-    for label, decision in recovery.items():
-        print(f"  {label:<26} recovery="
-              f"{'RECOVERED' if decision['recovered'] else 'NOT_RECOVERED'}")
+    for name, decision in recovery.items():
+        print(f"  {name:<22} recovery={'RECOVERED' if decision['recovered'] else 'NOT_RECOVERED'}")
 
     for row in all_rows:
-        row["approval_baseline_accuracy"] = always_retrieve_b["accuracy"]
-        row["approval_baseline_retrieval_cost"] = always_retrieve_b["retrieval_cost"]
+        row["approval_baseline_accuracy"] = approval_baseline["accuracy"]
+        row["approval_baseline_retrieval_cost"] = approval_baseline["retrieval_cost"]
         row["recovery_baseline_accuracy"] = old_policy_a["accuracy"]
-        if row["policy"] in decisions and row["knowledge_base"] == "kb_b":
-            row["approval_status"] = "APPROVED" if decisions[row["policy"]]["approved"] else "DECLINED"
-            row["recovery_status"] = "RECOVERED" if recovery[row["policy"]]["recovered"] else "NOT_RECOVERED"
-        else:
-            row["approval_status"] = "N/A"
-            row["recovery_status"] = "N/A"
+        on_b = row["knowledge_base"] == "kb_b"
+        row["approval_status"] = (("APPROVED" if decisions[row["policy"]]["approved"] else "DECLINED")
+                                  if on_b and row["policy"] in decisions else "N/A")
+        row["recovery_status"] = (("RECOVERED" if recovery[row["policy"]]["recovered"] else "NOT_RECOVERED")
+                                  if on_b and row["policy"] in decisions else "N/A")
 
     with open(summary_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(all_rows[0].keys()))
         writer.writeheader()
         writer.writerows(all_rows)
-    query_results_path = summary_path.parent / "kb_b_query_results.csv"
-    paired_policy_names = ("old_policy", "adapted_policy", "full_retrain_policy")
-    query_ids_by_policy = {
-        name: [info["query_id"] for info in kb_b_evaluation_infos[name]]
-        for name in paired_policy_names
-    }
-    if len({tuple(ids) for ids in query_ids_by_policy.values()}) != 1:
-        raise RuntimeError("KB-B policy evaluations did not use the same query ordering")
+
+    # Paired per-question KB-B records for seed-level paired analysis.
     query_rows = []
     for index, query in enumerate(queries_b):
-        row = {
-            "seed": config["seed"],
-            "query_index": index,
-            "query_id": query.query_id,
-            "affected_by_drift": query.affected_by_drift,
-        }
-        for name in paired_policy_names:
-            info = kb_b_evaluation_infos[name][index]
+        row = {"seed": seed, "query_index": index, "query_id": query.query_id,
+               "affected_by_drift": query.affected_by_drift, "drift_type": query.drift_type,
+               "memory_status": query.memory_status}
+        for name in TRAINED_POLICIES:
+            info = kb_b_infos[name][index]
+            assert info["query_id"] == query.query_id
             row[f"{name}_correct"] = int(bool(info["correct"]))
-            row[f"{name}_action"] = int(info["action"])
+            row[f"{name}_action"] = info["final_action"]
+            row[f"{name}_searches"] = info["searches"]
         query_rows.append(row)
+    query_results_path = summary_path.parent / "kb_b_query_results.csv"
     with open(query_results_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(query_rows[0].keys()))
         writer.writeheader()

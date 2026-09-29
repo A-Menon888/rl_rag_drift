@@ -1,31 +1,26 @@
+---
+updated: 2025-03-01
+---
 # Users API
 
-The Users API manages application user accounts.
-Create a user with POST /users.
-Retrieve a user with GET /users/{id}.
-Update a user with PUT /users/{id}.
-Delete a user with DELETE /users/{id}.
-The user identifier is an integer.
-The email field is required when creating a user.
-Email addresses must be unique.
-The name field is optional.
+The Users API manages application user accounts. The API returns JSON responses, and passwords are never returned in user responses.
+
+Create a user with POST /users. Retrieve a user with GET /users/{id}. Update a user with PUT /users/{id}. Delete a user with DELETE /users/{id}.
+
+The user identifier is an integer. New users receive a unique identifier. The email field is required when creating a user, and the name field is optional.
+
+Email addresses must be unique. Email addresses are stored in lowercase.
+
+Passwords must be at least 8 characters long.
+
 The default account status is active.
-New users receive a unique identifier.
-A successful creation returns HTTP 201.
-A successful retrieval returns HTTP 200.
-Missing users return HTTP 404.
-Invalid request data returns HTTP 400.
-Deleted users cannot access the application.
-User deletion is permanent.
-The API returns JSON responses.
-Passwords are never returned in user responses.
-Email addresses are stored in lowercase.
-User creation requires authentication.
-User updates require authentication.
-Administrators can delete any user.
-Regular users can update their own profile.
-The API supports pagination for user listings.
-The default page size is 20 users.
-The maximum page size is 100 users.
-User records contain created_at timestamps.
-User records contain updated_at timestamps.
+
+A successful creation returns HTTP 201. A successful retrieval returns HTTP 200. Missing users return HTTP 404. Invalid request data returns HTTP 400.
+
+User deletion is permanent. Deleted users cannot access the application. Administrators can delete any user.
+
+User creation requires authentication. User updates require authentication. Regular users can update their own profile.
+
+The API supports pagination for user listings. The default page size is 20 users. The maximum page size is 100 users. User listings are limited to 60 requests per minute per client.
+
+User records contain created_at and updated_at timestamps.

@@ -1,5 +1,5 @@
 ---
-updated: 2026-06-01
+updated: 2024-01-15
 ---
 This document provides API reference material for the components of Django's authentication system. For more details on the usage of these components or how to customize authentication and authorization see the authentication topic guide.
 
@@ -10,18 +10,18 @@ class models.User
 User objects have the following fields:
 
 username
-Required. 160 characters or fewer. Usernames may contain letters, numbers, and the _, @, +, . and - characters.
+Required. 30 characters or fewer. Usernames may contain alphanumeric, _, @, +, . and - characters.
 
 The max_length should be sufficient for many use cases. If you need a longer length, please use a custom user model.
 
 first_name
-Optional (blank=True). 160 characters or fewer.
+Optional (blank=True). 30 characters or fewer.
 
 last_name
 Optional (blank=True). 150 characters or fewer.
 
 email
-Optional (blank=True). The user's email address.
+Optional (blank=True). Email address.
 
 password
 Required. A hash of, and metadata about, the password. (Django doesn't store the raw password.) Raw passwords can be arbitrarily long and can contain any character. The metadata in this field may mark the password as unusable. See the password documentation.
@@ -38,15 +38,13 @@ Boolean. Allows this user to access the admin site.
 is_active
 Boolean. Marks this user account as active. We recommend that you set this flag to False instead of deleting accounts. That way, if your applications have any foreign keys to users, the foreign keys won't break.
 
-An active user's session expires after 4800 seconds (80 minutes) of inactivity by default, after which they must log in again.
-
 This doesn't necessarily control whether or not the user can log in. Authentication backends aren't required to check for the is_active flag but the default backend (ModelBackend) and the RemoteUserBackend do. You can use AllowAllUsersModelBackend or AllowAllUsersRemoteUserBackend if you want to allow inactive users to login. In this case, you'll also want to customize the AuthenticationForm used by the LoginView as it rejects inactive users. Be aware that the permission-checking methods such as has_perm() and the authentication in the Django admin all return False for inactive users.
 
 is_superuser
 Boolean. Treats this user as having all permissions without assigning any permission to it in particular.
 
 last_login
-A datetime value recording the user's most recent login.
+A datetime of the user's last login.
 
 date_joined
 The date/time when the account was created.
@@ -79,7 +77,7 @@ check_password(raw_password)
 acheck_password(raw_password)
 Asynchronous version: acheck_password()
 
-Returns True if the given raw string matches the user's password. (This handles the password hashing needed for the comparison.)
+Returns True if the given raw string is the correct password for the user. (This takes care of the password hashing in making the comparison.)
 
 set_unusable_password()
 Marks the user as having no password set by updating the metadata in the password field. This isn't the same as having a blank string for a password. check_password() for this user will never return True. Doesn't save the User object.
@@ -208,7 +206,7 @@ Permission objects have the following fields:
 
 class models.Permission
 name
-Required. 260 characters or fewer. Example: 'Can vote'.
+Required. 255 characters or fewer. Example: 'Can vote'.
 
 content_type
 Required. A foreign key to the ContentType model.
@@ -231,7 +229,7 @@ Group objects have the following fields:
 
 class models.Group
 name
-Required. 160 characters or fewer. Any characters are permitted. Example: 'Awesome Users'.
+Required. 80 characters or fewer. Any characters are permitted. Example: 'Awesome Users'.
 
 permissions
 Many-to-many field to Permission:
@@ -291,8 +289,6 @@ The HttpRequest object, if one was provided to authenticate().
 Authentication backends
 This section details the authentication backends that come with Django. For information on how to use them and how to write your own authentication backends, see the Other authentication sources section of the User authentication guide.
 
-In local development, the authentication service is typically run on port 8020 rather than the default 8000, to avoid clashing with the main application server.
-
 Available authentication backends
 The following backends are available in django.contrib.auth.backends:
 
@@ -324,7 +320,7 @@ Asynchronous version: ahas_perm()
 Uses get_all_permissions() to check if user_obj has the permission string perm.
 
 class ModelBackend[source]
-This is the default authentication backend used by Django. It authenticates a user with a user identifier and a password. For Django's default user model, the user identifier is the username, for custom user models it is the field specified by USERNAME_FIELD (see Customizing Users and authentication).
+This is the default authentication backend used by Django. It authenticates using credentials consisting of a user identifier and password. For Django's default user model, the user identifier is the username, for custom user models it is the field specified by USERNAME_FIELD (see Customizing Users and authentication).
 
 It also handles the default permissions model as defined for User and PermissionsMixin.
 

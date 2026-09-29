@@ -1,5 +1,5 @@
 ---
-updated: 2025-03-01
+updated: 2024-01-15
 ---
 # Payments API
 
@@ -9,7 +9,7 @@ Create a payment with POST /payments. Retrieve a payment with GET /payments/{id}
 
 Payment amounts are represented in cents. Payment requests require an amount and a customer_id. The currency field is required. The default currency is USD.
 
-The maximum payment amount is 1000000 cents. Payments above 250000 cents require manual review by the risk team before they are captured.
+The maximum payment amount is 500000 cents. Payments above 250000 cents require manual review by the risk team before they are captured.
 
 Payment status can be pending, completed, failed, or refunded. Payment records include created_at and updated_at timestamps.
 
@@ -17,6 +17,4 @@ Payment requests support idempotency keys. The idempotency key prevents duplicat
 
 Payment failures return HTTP 402. Invalid payment data returns HTTP 400. Missing payments return HTTP 404.
 
-Administrators can refund completed payments. Refund requests use POST /payments/{id}/refund. Refunded payments cannot be charged again.
-
-Payment events are delivered to registered webhooks. Failed webhooks are retried up to 5 times with exponential backoff.
+Payment events are delivered to registered webhooks. Failed webhooks are retried up to 3 times with exponential backoff.

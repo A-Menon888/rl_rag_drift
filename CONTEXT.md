@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This repository is a deterministic research prototype for testing whether a reinforcement-learning policy learns when retrieval is worth its cost after a documentation knowledge base changes.
+This repository is a deterministic research prototype for testing whether a reinforcement-learning retrieval policy (SEARCH_MORE / ANSWER / GIVE_UP over a frozen reader) learned on one documentation knowledge base degrades when the knowledge base drifts, and how cheaply it can be adapted.
 
 The active experiment trains on Knowledge Base A, evaluates the frozen policy on A and B, continues training from the old weights on B, trains a separate policy from scratch on B, and compares all policies with deterministic evaluation metrics.
 
@@ -12,20 +12,23 @@ The corpus is local Markdown. No LLM or external API is used by the active code 
 
 ```text
 configs/default.yaml           Experiment configuration
-data/documentation/kb_a/*.md   Original documentation snapshot
-data/documentation/kb_b/*.md   Changed documentation snapshot
+data/documentation/kb_0/*.md   Generator memory snapshot (closed-book knowledge; never retrieved)
+data/documentation/kb_a/*.md   Original deployed documentation snapshot
+data/documentation/kb_b/*.md   Drifted documentation snapshot
+data/documentation/facts.yaml  Fact manifest: answer-slot regex + hand-written questions
 experiments/run_all.py         Training, evaluation, plots, CSV, checkpoints
 experiments/analyze_adaptation.py Paired seed analysis, power, bootstrap, control validation
-src/data/documents.py          Markdown loader, chunker, KB pairing, query builder
-src/data/generator.py          Shared Query record and compatibility answer method
+src/data/documents.py          Markdown loader and chunker
+src/data/facts.py              Fact extraction, drift typing, memory status, query builder
+src/data/generator.py          Shared Query record
 src/retrieval/embeddings.py    Hashed-token or optional sentence-transformer embeddings
 src/retrieval/retriever.py     Top-k inner-product retrieval
-src/generation/mock.py         Deterministic answer generator
-src/environment/rl_rag_env.py  Gymnasium environment
-src/agents/baselines.py        Always-direct, always-retrieve, random policies
+src/generation/mock.py         Deterministic slot reader (closed-book memory / open-book extraction)
+src/environment/rl_rag_env.py  Gymnasium environment: one question per episode, paged search with a budget
+src/agents/baselines.py        Answer-directly, search-N-then-answer, random policies
 src/agents/rl_agent.py         MLP policy and Monte Carlo REINFORCE
 src/evaluation/metrics.py      Evaluation and retrieval metric helpers
-src/evaluation/plots.py        Matplotlib reward-series helper
+src/evaluation/plots.py        Matplotlib training-curve helper
 tests/test_documents.py        Document and retrieval tests
 tests/test_env.py              Environment, evaluation, and training tests
 ```
@@ -34,139 +37,124 @@ tests/test_env.py              Environment, evaluation, and training tests
 
 Use this path when making changes:
 
-1. **Queries and drift pairing:** start with `src/data/documents.py`. `load_documents()` creates chunks; `generate_document_queries()` aligns KB-A/KB-B chunks, assigns stable query IDs, marks `affected_by_drift`, and selects seeded query wording. Do not change `memorized_answer`, `current_answer`, or IDs when experimenting with phrasing.
-2. **Observation and environment behavior:** read `src/environment/rl_rag_env.py`. `_state()` builds the 388-value policy input; `step()` executes DIRECT/RETRIEVE, computes correctness/reward, updates the cache, and returns `info`. This is the control point for feature engineering, not `rl_agent.py`.
-3. **RL logic:** read `src/agents/rl_agent.py`. `PolicyNetwork` defines the input/output shape; `RLAgent.act()` selects actions; `train_episode()` collects one episode; `update()` performs REINFORCE. Change this only when changing the learning algorithm itself.
-4. **Accuracy and metrics:** read `src/evaluation/metrics.py`. `summarize()` calculates accuracy, average reward, retrieval rate/cost, and drifted/stable accuracy from environment `info` records. `retrieval_diagnostics()` is for ranking analysis and is separate from policy evaluation.
-5. **Experiment wiring and decisions:** read `experiments/run_all.py`. `run_experiment()` creates the A/B environments, trains/evaluates old/adapted/retrained policies, runs baselines, and writes `summary.csv`. `approval_decision()` compares candidates to `always_retrieve/kb_b`; `recovery_decision()` compares KB-B candidates to `old_policy/kb_a`.
-6. **Repeated seeds:** read `experiments/run_seeds.py`. It overrides `config["seed"]` for each run, which controls RL initialization/action randomness and query-template selection, writes per-seed summaries, and aggregates metrics. It reuses `run_experiment()` rather than duplicating the benchmark.
-7. **Experiment knobs:** edit `configs/default.yaml`. `seed`, `top_k`, `train_episodes`, `learning_rate`, `retrieval_cost`, and `approval_margin` are active runner inputs. `correct_reward` and `incorrect_reward` are documented settings but are not currently forwarded by `make_env()`.
+1. **Facts, queries and drift:** start with `data/documentation/facts.yaml` and `src/data/facts.py`. `build_fact_queries()` extracts each fact's value from KB-0/KB-A/KB-B, computes drift type and memory status, and emits one query per hand-written question. Query IDs are `<fact_id>.q<index>`; add questions at the end of a fact's list to keep existing IDs stable.
+2. **Reader:** `src/generation/mock.py`. The two explicit reader assumptions (evidence overrides memory; newest page wins a conflict) live here and nowhere else.
+3. **Observation and environment behavior:** `src/environment/rl_rag_env.py`. `FEATURES` lists every policy-visible feature; `_observation()` builds them; `step()` executes an action and computes reward. This is the control point for feature engineering, not `rl_agent.py`.
+4. **RL logic:** `src/agents/rl_agent.py`. `run_episode()` samples one question; `update()` performs batched REINFORCE; `train_batch()` does both. Change this only when changing the learning algorithm itself.
+5. **Metrics:** `src/evaluation/metrics.py`. `summarize()` computes per-episode metrics from terminal `info` records. `retrieval_diagnostics()` is separate ranking analysis.
+6. **Experiment wiring and decisions:** `experiments/run_all.py`. `run_experiment()` builds the A/B environments, trains/evaluates old/adapted/retrained policies, runs baselines, and writes `summary.csv` and the KB-B sidecar. `approval_decision()` compares candidates to `search_once/kb_b`; `recovery_decision()` compares KB-B candidates to `old_policy/kb_a`.
+7. **Repeated seeds:** read `experiments/run_seeds.py`. It overrides `config["seed"]` for each run, which controls RL initialization and action randomness, writes per-seed summaries, and aggregates metrics. It reuses `run_experiment()` rather than duplicating the benchmark.
+8. **Experiment knobs:** `configs/default.yaml` (see Configuration).
 
 For an RL or accuracy change, the usual reading order is:
-`documents.py` -> `rl_rag_env.py` -> `rl_agent.py` -> `metrics.py` -> `run_all.py` -> the matching test file.
+`facts.py` -> `mock.py` -> `rl_rag_env.py` -> `rl_agent.py` -> `metrics.py` -> `run_all.py` -> the matching test file.
 
-For a seed/query change, use:
-`documents.py` -> `run_all.py` -> `run_seeds.py` -> `test_documents.py`.
+For a corpus/fact change, use:
+`facts.yaml` -> `facts.py` -> `test_documents.py` (which enforces uniqueness, coverage and no answer leakage in questions).
 
 The generated files under `results/` are outputs, not source of truth. Recreate them with `.venv\Scripts\python.exe experiments/run_all.py` or `.venv\Scripts\python.exe experiments/run_seeds.py --n-seeds 10`.
 
 ## Active documentation corpus
 
-Both snapshots currently contain the same three documentation files, but their chunk counts may differ after content growth or formatting changes. With the current corpus and default 80-word chunking, KB-A has 157 chunks and KB-B has 159 chunks:
+Three snapshots of the same pages form a timeline: memory (`kb_0`) -> deployed (`kb_a`) -> drifted (`kb_b`).
 
-- `authentication.md`: expanded Django authentication API reference material and authentication behavior; currently 152 KB-A chunks and 154 KB-B chunks.
-- `users.md`: user endpoints, account status, and pagination.
-- `payments.md`: payment endpoints, currency/status values, and idempotency behavior.
+- `authentication.md`: Django auth API reference (real text; formatting artifacts such as pilcrows and curly apostrophes were removed so only intended edits differ).
+- `users.md`, `payments.md`: synthetic API reference, one topic per paragraph.
+- `faq.md` (KB-A and KB-B only): restates a few facts. It is deliberately not updated in KB-B (its `updated:` date stays 2025-03-20), which creates contradictions.
 
-KB-B changes content and may add or remove chunks. Examples include `/v2/...` paths, authentication expiry changing from 3600 to 7200 seconds, user status changing from `active` to `pending`, pagination changing from 20/100 to 50/200, payment currency changing from USD to EUR, and payment status/idempotency changes.
+Every page starts with front matter (`---` / `updated: YYYY-MM-DD` / `---`), parsed by the loader into `DocumentChunk.updated`. KB-0 pages are dated 2024-01-15, KB-A reference pages 2025-02/03, KB-B reference pages 2026-05/06.
+- `kb_0` contains only the reference pages, with some facts absent (unknown to memory) or at older values (stale memory).
 
-## Documents and query pairing
+KB-B edits are exact, reviewable replacements: `/v2` endpoints, PUT -> PATCH, EUR, required idempotency keys valid for 48 hours, larger page sizes, a pending default status, reversible deletion, longer Django field limits, additions (refund window, restore window, session idle timeout, dev port) and removals (manual-review threshold, listing rate limit).
 
-`DocumentChunk` is a frozen dataclass with:
+## Facts and queries
 
-```python
-text, document_id, source, title, chunk_id
-```
+`facts.yaml` lists facts as `id`, owning `source` page, a `pattern` with exactly one capture group, and hand-written `questions`. No values are written in the manifest. `src/data/facts.py`:
 
-`load_documents()` finds sorted Markdown files, extracts the first `#` heading as the title, removes heading lines from text, splits paragraphs, and further splits paragraphs over `max_words` (default 80). `value` is a compatibility alias for `text`.
+- `fact_value(fact, chunks)` reads the value from the owning page (at most one match, otherwise error) plus any different values stated on other pages (`conflicting`). Values are normalized (lowercase, collapsed whitespace), so formatting-only edits are not drift.
+- `drift_type(A, B)`: `removed` (absent in B), `added` (absent in A), `contradicted` (another B page disagrees), `modified`, `unchanged`, or `absent` (never documented; unanswerable, not drift).
+- `memory_status(memory, gold)`: `unknown` (memory has no answer), `correct`, or `stale` (a wrong value, including any value for an unanswerable question).
+- `build_fact_queries(facts, kb_0, kb_a, kb_b)`: KB-A queries cover facts documented in KB-A plus `absent` facts (no leakage of KB-B additions); KB-B queries cover every fact, so removed and absent facts are asked with `gold_answer=None`. It rejects questions containing any value of their fact.
 
-`load_knowledge_base(root, "kb_a" | "kb_b")` selects one explicit snapshot and rejects other names.
+`Query` fields: `query_id`, `fact_id`, `source`, `text`, `answer_pattern`, `memory_answer`, `gold_answer`, `drift_type` (`baseline` on KB-A), `memory_status`, and the derived `affected_by_drift`.
 
-`generate_document_queries(kb_a_chunks, kb_b_chunks, seed=7)` aligns chunks by source sequence using `difflib.SequenceMatcher`. Equal chunks act as anchors; changed regions are paired positionally. Unmatched KB-A chunks are retained as deleted/currently unavailable queries with an empty KB-B answer, while KB-B-only additions are not paired because they have no frozen KB-A answer. It returns paired query lists with stable IDs and does not fail merely because chunk counts differ. Query text is selected deterministically from five alternative templates using a local seeded RNG; changing the seed changes only `Query.text`, not the query ID or either answer field:
+Current counts: 36 facts (3 never documented). KB-A has 64 queries (58 answerable; memory correct 40 / stale 12 / unknown 12). KB-B has 72 queries (62 answerable; unchanged 22, modified 26, contradicted 6, added 8, removed 4, absent 6; memory correct 18 / stale 34 / unknown 20).
 
-- KB-A queries have `memorized_answer == current_answer` and `affected_by_drift == False`.
-- KB-B queries retain KB-A text as `memorized_answer`, use KB-B text as `current_answer` when a pair exists, and set `affected_by_drift` when the text differs or the KB-A chunk is deleted from KB-B. A deleted KB-A chunk has `current_answer == ""`; it is retained for alignment but is not a valid live retrieval target.
-- Templates include direct question, answer-from-docs, lookup, documented-rule, and less-verbatim topic phrasing. The first eight/five source words provide the template content.
-
-`Query.answer()` is a compatibility method that returns `current_answer`; it is not used to provide ground truth in the observation.
-
-## Control flow
+## Control flow (one episode = one question)
 
 ```text
-documentation query
-        |
-        v
-388-value observation
-        |
-        v
-policy chooses DIRECT (0) or RETRIEVE (1)
-        |                         |
-memorized KB-A answer       search current snapshot
-or cached context           and use top retrieved chunks
-        \_________________________/
-                    |
-             deterministic mock answer
-                    |
-       compare with query.current_answer
-                    |
-                 reward/info
-                    |
-              optional policy update
+question --> observation (query embedding + FEATURES)
+                 |
+        policy (masked) chooses
+   SEARCH_MORE ------------------ ANSWER ------------------ GIVE_UP
+   reveal next top_k unseen       reader answers from        abstain
+   chunks of the question's       evidence (newest page      (+1 if the question is
+   ranking; -search_cost;         wins conflicts), else      unanswerable, else
+   masked after max_searches      from KB-0 memory;          give_up_reward)
+        |                         +1 / -1 vs gold_answer
+        +--> next observation            \_____ episode ends ______/
 ```
 
-The policy selects an action. The environment owns retrieval, answer generation, caching, correctness, reward, and audit information.
+The policy only selects actions. The environment owns retrieval, the reader, correctness, reward, and audit `info`.
 
 ## Retrieval and generation
 
-`Retriever` embeds every chunk's `.text` and returns `RetrievalResult(fact, score)`. The field is still named `fact` for compatibility, but contains a `DocumentChunk`. Search uses normalized vector inner products; FAISS is optional and disabled by the active runner.
+`Retriever` embeds every chunk's `.text` and returns `RetrievalResult(fact, score)` (`fact` holds a `DocumentChunk`). Search uses normalized inner products. The environment builds its retriever once and, at reset, ranks the question's top `top_k * max_searches` chunks; each SEARCH_MORE reveals the next `top_k` of that ranking (paged search), so every search adds unseen evidence.
 
-`Embedder` supports a deterministic hashed bag-of-token fallback and a `sentence-transformers` backend. `Retriever` now defaults to requesting semantic embeddings. If model loading fails while fallback is allowed, `Embedder` records the exception and emits a warning before using hashed embeddings. The active environment still does not pass the YAML embedding configuration through, so it uses `Retriever` defaults; the configured `all-MiniLM-L6-v2` model now loads successfully in the active environment after installing `tf-keras`, and reports backend `sentence-transformers`. The config also does not currently control `correct_reward`, `incorrect_reward`, or `allow_embedding_fallback` in the environment.
+`Embedder` supports a sentence-transformers backend (`all-MiniLM-L6-v2`, the default) and a hashed bag-of-token fallback. Vectors are cached by text. The YAML embedding settings are still not passed through `make_env()`; `Retriever` defaults are used.
 
-Embedding instances are shared by configuration and cache vectors by input text. Corpus chunks are encoded once per configured embedder, even when the environment rebuilds a retriever on every reset. Query text is also encoded once and reused by both observation construction and retrieval. The project `.venv` contains CPU Torch, sentence-transformers, and the pinned `tf-keras` compatibility dependency required by Transformers/Keras 3.
+`MockAnswerGenerator` is a deterministic slot reader standing in for a frozen LLM, with two explicit assumptions:
 
-`MockAnswerGenerator` returns the first retrieved context item's `.value`, or `query.memorized_answer` when no context is supplied. Consequently, uncached DIRECT is correct for KB-A and for unchanged KB-B queries, but wrong for drifted KB-B queries. A successful retrieval caches its retrieved chunks by query ID; cached DIRECT then has no retrieval cost.
+1. **Evidence overrides memory.** It extracts every statement of the question's answer slot (`answer_pattern`) from the evidence; if there is none, it answers from `memory_answer` (KB-0), or `None` ("don't know").
+2. **Newer documentation supersedes older.** When evidence states different values, the value from the page with the latest `updated:` date wins; ties go to evidence order.
+
+The reader never knows which page owns a fact. So it is wrong when only a stale page was retrieved, and it would be wrong if a stale page carried a newer date (tested). Grading still uses the owning page's value (`gold_answer`), which is independent of the reader rule.
 
 ## Environment
 
-`RLRAGEnv(queries, snapshots, drift_events=None, ...)` has:
+`RLRAGEnv(queries, chunks, *, top_k, max_searches, search_cost, correct_reward, incorrect_reward, give_up_reward)`:
 
-- Actions: `0 = DIRECT`, `1 = RETRIEVE`.
-- Observation shape `(388,)`: the full 384-dimensional current-query embedding, latest reward, mean retrieval frequency over the last 20 actions, database version, and cache availability.
-- Reward defaults: correct `+1.0`, incorrect `-1.0`, and retrieval cost `0.10`, so correct retrieval is `+0.9` and incorrect retrieval is `-1.1`.
+- `reset(options={"query_index": i})` starts question `i` (default: the next in order). Episodes end on ANSWER or GIVE_UP.
+- Actions: `0 = SEARCH_MORE`, `1 = ANSWER`, `2 = GIVE_UP`. `action_mask()` / `info["action_mask"]` disables SEARCH_MORE after `max_searches`; stepping a masked action raises.
+- Rewards: SEARCH_MORE `-search_cost`. ANSWER `correct_reward` iff the answer equals gold (a non-None answer), else `incorrect_reward`, including answering an unanswerable question. GIVE_UP `correct_reward` on an unanswerable question, else `give_up_reward` (default 0, between right and wrong).
+- Observation: query embedding (384) + `FEATURES`: searches used, can search, memory has answer, evidence has answer, evidence conflict, evidence agrees with memory, last search revealed a new value, best score, last search score. All are computed from the question, the evidence, and the generator's own outputs; a test checks that relabelling gold/drift/memory status leaves observations unchanged.
+- Terminal `info`: query ID, final action, answer, ground truth, correct, terminal reward, episode return, searches, retrieval cost, evidence conflict, answerable, drift type, memory status, `affected_by_drift`.
 
-`reset()` clears time, recent history, database version, cache, and recreates the retriever from `snapshots[0]`. `step()` uses the query at `t % len(queries)`, retrieves only for action 1, generates an answer, compares it with `current_answer`, caches only correct retrievals, records reward/cost/history, and returns `(observation, reward, False, False, info)`. Episodes are ended by the caller after `len(env.queries)` steps; the environment itself never returns terminated or truncated as true.
-
-The `drift_events` argument is accepted for compatibility but is not used. The active experiment supplies one stationary snapshot `{0: chunks}` per environment, so `database_version` remains 0 and `drift_event` is always `None`. `info` includes query ID, action, answer, ground truth, correctness, reward, database version, drift fields, retrieval cost, cache hit, cache size, and `affected_by_drift`.
+The old cache, recent-reward/retrieval-rate features, database version and `drift_events` were removed.
 
 ## RL and baseline policies
 
-`PolicyNetwork` is `Linear(388, 32) -> Tanh -> Linear(32, 2)`. `RLAgent.act()` samples a categorical action during exploration and chooses the argmax when `explore=False`.
+`PolicyNetwork` is `Linear(obs, 64) -> Tanh -> Linear(64, 3)`. `RLAgent.act(observation, info, explore)` samples from the masked categorical distribution (argmax when `explore=False`). `update()` is batched Monte Carlo REINFORCE: undiscounted rewards-to-go within each episode (never across questions), normalized over the batch as the baseline, plus an entropy bonus (`entropy_coef`). `train_policy()` runs `train_epochs` passes over the question set in a seeded random order, one update per `batch_size` episodes, and returns the per-epoch mean return.
 
-`train_episode()` collects log probabilities, rewards, and entropies for one externally sized episode. `update()` computes discounted returns with `gamma=0.99`, normalizes them when there is more than one return, applies an entropy bonus (`entropy_coef=0.05`), and updates the Adam optimizer once. This is REINFORCE, not PPO; there is no critic or replay buffer.
-
-Baselines are `AlwaysDirect`, `AlwaysRetrieve`, and seeded `RandomPolicy`. The runner evaluates baselines with stochastic/random actions as defined by each policy. RL evaluation calls `act(..., explore=False)` and does not update weights.
+Baselines: `answer_directly` (closed-book), `search_once` (1 search then answer), `search_all` (use the whole budget then answer), and seeded `random` over available actions.
 
 ## Current experiment runner
 
 `experiments/run_all.py`:
 
-1. Loads KB-A and KB-B and creates aligned query pairs.
-   It prints total, drifted, and stable query counts for each KB immediately after query generation.
-2. Trains `old_policy` on KB-A for `train_episodes` and saves `rl_old_policy_kb_a.pt`.
-3. Evaluates the old policy deterministically on KB-A and KB-B.
-4. Copies old weights into `adapted_policy`, trains it on KB-B, and saves `rl_adapted_policy_kb_b.pt`.
-5. Trains `full_retrain_policy` from a new initialization on KB-B and saves `rl_full_retrain_policy_kb_b.pt`.
-6. Evaluates the adapted and full-retrain policies deterministically on KB-B.
-7. Evaluates each of the three baselines on both KBs.
-8. Computes baseline-relative approval and recovery decisions:
+1. Loads KB-0/KB-A/KB-B and builds fact queries; prints counts per KB.
+2. Trains `old_policy` on KB-A, saves `rl_old_policy_kb_a.pt` and a training curve, and evaluates it (frozen, greedy) on KB-A and KB-B.
+3. Copies old weights into `adapted_policy` and trains it on KB-B (same epochs as a full retrain); trains `full_retrain_policy` from a fresh initialization on KB-B; evaluates both on KB-B.
+4. Evaluates the four baselines on both KBs.
+5. Computes baseline-relative decisions:
 
 ```text
-approval: candidate accuracy > always_retrieve/kb_b accuracy - approval_margin
-          and candidate retrieval cost <= always_retrieve/kb_b cost + approval_margin
+approval: candidate accuracy > search_once/kb_b accuracy - approval_margin
+          and candidate retrieval cost <= search_once/kb_b cost + approval_margin
 recovery: candidate KB-B accuracy >= old_policy/kb_a accuracy
 ```
 
-The `always_retrieve` KB-B row is the same-run approval baseline. `approval_margin` is configurable and defaults to `0.0`; it controls how much accuracy/cost tolerance is allowed around that baseline. The old fixed score formula and fixed recovery target are no longer used. Recovery is measured against the same-run `old_policy` KB-A accuracy, which is the pre-drift reference. Only adapted and full-retrain KB-B rows receive approval and recovery statuses; other rows use `N/A`.
+The runner writes 12 CSV rows (old policy on A/B, adapted and full retrain on B, four baselines on A/B) with `accuracy`, `average_reward` (mean episode return), `average_searches`, `retrieval_rate` (episodes with at least one search), `retrieval_cost`, `unnecessary_retrieval_rate` (searched although closed-book memory was correct), `give_up_rate`, `wrong_answer_rate`, `unanswerable_accuracy`, `drifted_accuracy`, `stable_accuracy`, `training_final_return`, and the approval/recovery fields. The sidecar `kb_b_query_results.csv` has per-question `drift_type`, `memory_status`, and each trained policy's `_correct`, `_action` (final action) and `_searches`.
 
-The runner writes 10 CSV rows: old policy on A/B, adapted policy on B, full retrain on B, and three baselines on A/B. Each row contains `accuracy`, `average_reward`, `retrieval_rate`, `retrieval_cost`, drifted/stable accuracy fields, `training_average_reward` for trained RL rows, `approval_baseline_accuracy`, `approval_baseline_retrieval_cost`, `recovery_baseline_accuracy`, `approval_status`, and `recovery_status`. Evaluation metrics are computed from actual `info` records by `summarize()`.
+Fixed-strategy reference (deterministic, top_k=1, max_searches=3, search cost 0.10), accuracy/return: KB-A answer-directly 0.625/0.250, search-once 0.875/0.650, search-all 0.891/0.481, per-question oracle 0.984/0.956. KB-B answer-directly 0.250/-0.500, search-once 0.667/0.233, search-twice 0.778/0.356, search-all 0.806/0.311, oracle 0.944/0.872.
 
-The 2026-09-21 default diagnostic run after switching the observation from seven truncated embedding values to the full 384-dimensional embedding produced 157 paired queries. KB-A had 0 drifted/157 stable queries; KB-B had 79 drifted/78 stable queries. On KB-B, old/adapted/full-retrain accuracy was `0.5032`/`0.8344`/`0.8153`, and retrieval rate was `0.0318`/`0.7898`/`0.8344`. Always-retrieve accuracy was `0.7516`, so retrieval is no longer perfect on the expanded corpus. These single-seed results are not directly comparable to the older 10-seed aggregate generated from the smaller eight-query corpus.
+The 2026-09-29 single-seed default run (seed 7, 300 epochs, batch 16, about 5 minutes), accuracy/return: old policy on KB-A 0.984/0.950 (0.34 searches per question, gives up on all unanswerable questions). Frozen on KB-B 0.597/0.183 with a 0.375 wrong-answer rate: it keeps trusting stale memory (modified 0.42, contradicted 0.17, added 0.25, removed 0.25; unchanged and absent 1.00). Continued REINFORCE (adapted) 0.847/0.685; full retrain 0.944/0.839. Full retrain resolves all contradictions by searching (1.8 searches); adapted stays at 0.17 on contradictions. The retrain policy gives up on removed facts without searching, which it can only know by memorizing the question: evidence of per-question memorization while training and evaluation use the same questions. Single seed; not a generalization claim. Results under results/ predate this environment and are stale.
 
-`experiments/run_seeds.py` reuses `run_experiment()` for independent deterministic seeds. `--config` selects the YAML configuration, `--n-seeds` defaults to 10, and `--base-seed` defaults to 0; `--jobs` optionally runs independent seeds in separate processes without changing their seed configuration, and `--resume` reuses a seed only when both its summary and paired query sidecar exist. Each seed writes `results/metrics/seed_<seed>/summary.csv`, checkpoints, figures, and config. It also writes `results/metrics/aggregate_summary.csv`, containing mean, sample standard deviation, minimum, maximum, and JSON raw per-seed values for accuracy, average reward, retrieval rate, retrieval cost, drifted accuracy, and stable accuracy. It prints mean +/- standard deviation for accuracy and retrieval rate and checks seeded IDs/memorized answers. The checker currently flags empty answers, so deletion cases require that checker to be revisited even though the query generator intentionally represents deleted KB-A chunks with empty KB-B answers.
+`experiments/run_seeds.py` reuses `run_experiment()` for independent deterministic seeds. `--config` selects the YAML configuration, `--n-seeds` defaults to 10, and `--base-seed` defaults to 0; `--jobs` optionally runs independent seeds in separate processes without changing their seed configuration, and `--resume` reuses a seed only when both its summary and paired query sidecar exist. Each seed writes `results/metrics/seed_<seed>/summary.csv`, checkpoints, figures, and config. It also writes `results/metrics/aggregate_summary.csv`, containing mean, sample standard deviation, minimum, maximum, and JSON raw per-seed values for accuracy, average reward, average searches, retrieval rate, retrieval cost, unnecessary retrieval rate, give-up rate, drifted accuracy, and stable accuracy. It prints mean +/- standard deviation for accuracy and retrieval rate. Queries no longer depend on the seed; `alignment_issues()` checks once that every KB-A query exists in KB-B with the same memory answer.
 
-`configs/control_high_cost.yaml` is an explicit reduced validation control with 150 training episodes and retrieval cost 0.50; keep its outputs isolated from default metrics.
+`configs/control_high_cost.yaml` is an explicit reduced validation control with 60 training epochs and search cost 0.50; keep its outputs isolated from default metrics.
 
-Adapted and full-retrain evaluation within a seed use the same `queries_b` object and deterministic ordering. Each seed now also writes `kb_b_query_results.csv`, a sidecar containing paired per-query correctness and action fields for the old, adapted, and full-retrain policies; the existing summary schemas are unchanged. `run_seeds.py` accepts `--output-root` for isolated runs and `--retrieval-cost` for explicit control experiments.
+Adapted and full-retrain evaluation within a seed use the same `queries_b` object and deterministic ordering. Each seed also writes the `kb_b_query_results.csv` sidecar described above. `run_seeds.py` accepts `--output-root` for isolated runs and `--retrieval-cost` for explicit control experiments.
 
 `experiments/analyze_adaptation.py` reads `aggregate_summary.csv` plus the authoritative per-seed summaries and query-result sidecars. It reports the recovery ratio, full-retrain-minus-adapted paired accuracy differences, the configurable `z_value * SE` decision threshold, paired Cohen's d and magnitude bin, an exact two-sided paired-t minimum detectable effect at configurable alpha/power, and diagnostic within-seed query-bootstrap interval widths. It can compare a prefix such as 10 seeds with a 30-seed analysis and validate a separate adversarial control directory. The seed is the inferential unit; query bootstrap output does not affect the decision.
 
@@ -176,7 +164,7 @@ Outputs:
 - `results/metrics/config.json`
 - `results/metrics/adaptation_analysis.json`
 - `results/metrics/seed_<seed>/kb_b_query_results.csv`
-- reward plots under `results/figures/`
+- training curves under `results/figures/`
 - PyTorch checkpoints under `results/checkpoints/`
 
 ## Configuration
@@ -186,21 +174,29 @@ Outputs:
 ```yaml
 seed: 7
 corpus_dir: data/documentation
+facts_path: data/documentation/facts.yaml
 knowledge_bases: [kb_a, kb_b]
-top_k: 3
+top_k: 1            # chunks revealed per SEARCH_MORE (paged search)
+max_searches: 3     # retrieval budget per question
 use_semantic_embeddings: true
 embedding_model: all-MiniLM-L6-v2
+# Set this to true only when an explicit deterministic offline fallback is desired.
 allow_embedding_fallback: false
-train_episodes: 1000
+train_epochs: 300   # passes over the question set
+batch_size: 16      # episodes per REINFORCE update
 learning_rate: 0.001
-retrieval_cost: 0.10
+entropy_coef: 0.01
+retrieval_cost: 0.10   # per SEARCH_MORE
 correct_reward: 1.0
 incorrect_reward: -1.0
+give_up_reward: 0.0  # GIVE_UP on an answerable question (correct_reward if unanswerable)
 approval_margin: 0.0
 rolling_window: 30
 ```
 
-`run_all.py` consumes `seed`, `corpus_dir`, `top_k`, `train_episodes`, `learning_rate`, `retrieval_cost`, and `approval_margin`. `run_seeds.py` overrides `seed` per run without changing the RL algorithm or reward settings. `knowledge_bases`, embedding settings, reward settings, and `rolling_window` remain present but are not wired into the active runner. There is no `recovery_threshold` config value; recovery is entirely baseline-relative to the same-run `old_policy/kb_a` accuracy.
+`run_all.py` consumes `seed`, `corpus_dir`, `facts_path`, `top_k`, `max_searches`, `train_epochs`, `batch_size`, `learning_rate`, `entropy_coef`, `retrieval_cost`, `correct_reward`, `incorrect_reward`, `give_up_reward`, and `approval_margin`. `knowledge_bases`, embedding settings and `rolling_window` are present but not wired in. `run_seeds.py` overrides `seed` per run.
+
+`top_k: 1` is deliberate: with 3 chunks per search, the first search already surfaced both the stale FAQ and the newer reference page for every contradiction, so SEARCH_MORE was never needed. With 1 chunk per search, 5 of 6 contradictions need a second search, and the best fixed search depth differs between KB-A (1 search) and KB-B (2 searches).
 
 ## Tests and commands
 
@@ -214,28 +210,31 @@ python experiments/run_seeds.py --n-seeds 30 --jobs 4 --resume
 python experiments/analyze_adaptation.py --n-seeds 30 --compare-n-seeds 10
 ```
 
-The current suite contains 20 tests, including chunk metadata, explicit KB selection, seeded query phrasing, drift pairing, unequal-count alignment, retrieval metadata, environment behavior, caching, deterministic RL evaluation metrics, frozen evaluation, adaptation weight updates, approval/recovery decisions, and full-retrain smoke behavior.
+The current suite contains 34 tests covering: corpus formatting and front matter; value-based drift typing and memory status; drift-type coverage; no KB-B leakage into KB-A; non-trivial KB-A memory; no answer values in questions; one question per episode; SEARCH_MORE revealing unseen chunks; budget masking; closed-book, GIVE_UP and unanswerable rewards; newest-source reader resolution (including that it can be wrong); contradictions resolvable by searching more; observations independent of gold/drift labels; retrieval that can fail; baseline behavior; the agent never taking a masked action; frozen evaluation; training and adaptation weight updates; approval/recovery decisions; and the adaptation analysis.
 
 ## Current limitations and next work
 
-- The corpus and generator are synthetic/documentary placeholders; the mock generator measures exact retrieval/policy behavior, not language quality.
+- The corpus is small (36 facts) and partly synthetic; the slot reader measures retrieval/policy behavior, not language quality. The policy is trained and evaluated on the same questions (no held-out split yet).
+- `adapted_policy` is continued REINFORCE with the same budget as full retraining, not yet a small preference-based adaptation; its cost advantage cannot show up yet.
+- The observation includes the query embedding, so the policy can still memorize per question.
 - The active runner relies on `Retriever` defaults because the YAML embedding settings are not passed through `make_env()`; explicit embedding-model/fallback configuration remains future wiring work.
-- The environment still reconstructs retrievers on reset, but shared text-vector caching prevents repeated transformer work. The benchmark should be run with `.venv\Scripts\python.exe` so it does not depend on an unrelated system Python installation.
+- Run the benchmark with `.venv\Scripts\python.exe` so it does not depend on an unrelated system Python installation.
 - Retrieval diagnostics exist in `src/evaluation/metrics.py`, but the runner does not currently write per-query retrieval diagnostics.
 - The environment is stationary within each experiment arm; it does not apply scheduled drift during an episode.
 - Approval is a baseline-relative heuristic, not a statistical significance test; its reference row and margin are recorded in the CSV for auditability.
-- Repeated seeds, per-step logs, recovery-time analysis, and richer plots remain future work.
+- Per-step logs, recovery-time analysis, and richer plots remain future work.
 - Multi-seed aggregate infrastructure is implemented; the current 10-seed run is measurement infrastructure, not a scientific conclusion about margin selection.
 
-Do not claim that adaptation improves KB-B performance until the generated evaluation CSV and deterministic comparison support that conclusion. Preserve the separation between policy, action, environment, retrieval, generation, and cache state.
+Do not claim that adaptation improves KB-B performance until the generated evaluation CSV and deterministic comparison support that conclusion. Preserve the separation between policy, environment, retrieval, and reader.
 
 The important files are now clearly mapped:
 
-Queries, chunk alignment, drift flags: documents.py
-Observation, actions, cache, reward flow: rl_rag_env.py
+Facts, drift types, memory status: facts.yaml and facts.py
+Reader assumptions: mock.py
+Observation, actions, budget, reward flow: rl_rag_env.py
 Policy network and REINFORCE training: rl_agent.py
 Accuracy and metric calculations: metrics.py
 Main experiment wiring and approval/recovery decisions: run_all.py
-Ten-seed execution and aggregation: run_seeds.py
+Multi-seed execution and aggregation: run_seeds.py
 Active experiment settings: default.yaml
 Relevant tests: test_documents.py and test_env.py

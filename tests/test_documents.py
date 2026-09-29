@@ -1,92 +1,127 @@
 from pathlib import Path
+import re
 import pytest
 
-from src.data.documents import generate_document_queries, load_knowledge_base
+from src.data.documents import load_knowledge_base
+from src.data.facts import (
+    DRIFT_TYPES, Fact, FactValue, build_fact_queries, drift_type, fact_value, load_facts, memory_status,
+)
 from src.retrieval.retriever import Retriever
 
 CORPUS = Path(__file__).parents[1] / "data" / "documentation"
 
 
+def _snapshots():
+    return tuple(load_knowledge_base(CORPUS, name) for name in ("kb_0", "kb_a", "kb_b"))
+
+
 def _make_queries():
-    kb_a = load_knowledge_base(CORPUS, "kb_a")
-    kb_b = load_knowledge_base(CORPUS, "kb_b")
-    return generate_document_queries(kb_a, kb_b)
+    return build_fact_queries(load_facts(CORPUS / "facts.yaml"), *_snapshots())
 
 
 def test_document_loader_preserves_chunk_metadata():
     chunks = load_knowledge_base(CORPUS, "kb_a")
-    assert len(chunks) >= 1
-    assert all(chunk.document_id and chunk.source and chunk.title for chunk in chunks)
-    assert any("authentication" in chunk.text.lower() for chunk in chunks)
+    assert chunks
+    assert {"document_id", "source", "title", "chunk_id", "text"} <= set(chunks[0].__dataclass_fields__)
+    assert all(chunk.text for chunk in chunks)
 
 
-def test_kb_a_queries_have_no_drift():
-    queries_a, _ = _make_queries()
-    assert all(not q.affected_by_drift for q in queries_a), \
-        "KB-A queries should never be marked as drifted"
-    assert all(q.memorized_answer == q.current_answer for q in queries_a), \
-        "memorized_answer must equal current_answer for all KB-A queries"
+def test_knowledge_base_selection_is_explicit():
+    kb_0, kb_a, kb_b = _snapshots()
+    assert kb_0 and kb_a and kb_b
+    with pytest.raises(ValueError):
+        load_knowledge_base(CORPUS, "kb_c")
 
 
-def test_kb_b_drift_flag_matches_content():
-    queries_a, queries_b = _make_queries()
-    for qa, qb in zip(queries_a, queries_b):
-        assert qa.query_id == qb.query_id, "Query IDs must be stable across KB-A/KB-B pairs"
-        expected_drift = qa.memorized_answer != qb.current_answer
-        assert qb.affected_by_drift == expected_drift, (
-            f"Query {qb.query_id}: affected_by_drift={qb.affected_by_drift} "
-            f"but content differs={expected_drift}"
-        )
+def test_corpus_has_no_formatting_artifacts():
+    for path in CORPUS.glob("kb_*/*.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "¶" not in text and "’" not in text, path
 
 
-def test_kb_b_has_some_drifted_and_some_stable_queries():
+def test_every_fact_is_stated_at_most_once_on_its_page():
+    kb_0, kb_a, kb_b = _snapshots()
+    for fact in load_facts(CORPUS / "facts.yaml"):
+        for chunks in (kb_0, kb_a, kb_b):
+            fact_value(fact, chunks)  # raises if the owning page states the slot more than once
+
+
+def test_front_matter_dates_are_parsed_and_stale_faq_is_older():
+    _, kb_a, kb_b = _snapshots()
+    assert all(chunk.updated for chunk in kb_a + kb_b)
+    assert not any(chunk.text.startswith("---") or "updated:" in chunk.text for chunk in kb_a + kb_b)
+    dates = {chunk.source: chunk.updated for chunk in kb_b}
+    assert dates["faq.md"] < dates["payments.md"] and dates["faq.md"] < dates["users.md"]
+
+
+def test_drift_type_is_computed_from_values():
+    assert drift_type(FactValue("a", ()), FactValue("a", ())) == "unchanged"
+    assert drift_type(FactValue("a", ()), FactValue("b", ())) == "modified"
+    assert drift_type(FactValue("a", ()), FactValue("b", ("a",))) == "contradicted"
+    assert drift_type(FactValue(None, ()), FactValue("b", ())) == "added"
+    assert drift_type(FactValue("a", ()), FactValue(None, ())) == "removed"
+    assert drift_type(FactValue(None, ()), FactValue(None, ())) == "absent"
+
+
+def test_formatting_only_change_is_not_drift(tmp_path):
+    fact = Fact("f", "doc.md", r"valid for (\d+ hours)", ("How long?",))
+    for name, body in (("kb_a", "Keys are valid for 24 hours."), ("kb_b", "Keys are  valid for 24 hours!")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "doc.md").write_text(f"# Doc\n\n{body}", encoding="utf-8")
+    before, after = (fact_value(fact, load_knowledge_base(tmp_path, name)) for name in ("kb_a", "kb_b"))
+    assert drift_type(before, after) == "unchanged"
+
+
+def test_memory_status():
+    assert memory_status("24 hours", "24 hours") == "correct"
+    assert memory_status("24 hours", "48 hours") == "stale"
+    assert memory_status(None, "48 hours") == "unknown"
+    assert memory_status(None, None) == "unknown"
+    assert memory_status("24 hours", None) == "stale"
+
+
+def test_kb_b_covers_every_drift_type_and_queries_changed_facts():
     _, queries_b = _make_queries()
-    drifted = [q for q in queries_b if q.affected_by_drift]
-    stable  = [q for q in queries_b if not q.affected_by_drift]
-    assert len(drifted) >= 1, "KB-B must have at least one drifted query"
-    assert len(stable)  >= 1, "KB-B must have at least one stable (unchanged) query"
+    assert {query.drift_type for query in queries_b} == set(DRIFT_TYPES)
+    assert all(query.affected_by_drift == (query.drift_type not in {"unchanged", "absent"}) for query in queries_b)
+    assert all((query.gold_answer is None) == (query.drift_type in {"removed", "absent"}) for query in queries_b)
 
 
-def test_query_phrasing_is_seeded_and_preserves_alignment():
-    kb_a = load_knowledge_base(CORPUS, "kb_a")
-    kb_b = load_knowledge_base(CORPUS, "kb_b")
-    queries_a_1, queries_b_1 = generate_document_queries(kb_a, kb_b, seed=1)
-    queries_a_2, queries_b_2 = generate_document_queries(kb_a, kb_b, seed=2)
-    queries_a_1_repeat, queries_b_1_repeat = generate_document_queries(kb_a, kb_b, seed=1)
+def test_kb_a_does_not_leak_kb_b_facts():
+    queries_a, queries_b = _make_queries()
+    added = {query.fact_id for query in queries_b if query.drift_type == "added"}
+    assert added and not added & {query.fact_id for query in queries_a}
+    assert all(query.drift_type == "baseline" and not query.affected_by_drift for query in queries_a)
+    absent = {query.fact_id for query in queries_b if query.drift_type == "absent"}
+    assert {query.fact_id for query in queries_a if query.gold_answer is None} == absent
 
-    assert [query.text for query in queries_a_1] == [query.text for query in queries_a_1_repeat]
-    assert [query.text for query in queries_b_1] == [query.text for query in queries_b_1_repeat]
-    assert [query.text for query in queries_a_1] != [query.text for query in queries_a_2]
-    for first, second in zip(queries_a_1, queries_b_1):
-        assert first.query_id == second.query_id
-        assert first.memorized_answer == second.memorized_answer
-        assert second.current_answer in {chunk.text for chunk in kb_b}
+
+def test_kb_a_memory_is_non_trivial():
+    """Closed-book answering must sometimes fail on KB-A, so retrieval is sometimes needed."""
+    queries_a, _ = _make_queries()
+    statuses = {query.memory_status for query in queries_a}
+    assert statuses == {"correct", "stale", "unknown"}
+
+
+def test_memory_answer_is_shared_across_kbs():
+    queries_a, queries_b = _make_queries()
+    by_id = {query.query_id: query for query in queries_b}
+    assert all(by_id[query.query_id].memory_answer == query.memory_answer for query in queries_a)
+
+
+def test_questions_do_not_contain_answer_values():
+    kb_0, kb_a, kb_b = _snapshots()
+    for fact in load_facts(CORPUS / "facts.yaml"):
+        values = set()
+        for chunks in (kb_0, kb_a, kb_b):
+            found = fact_value(fact, chunks)
+            values |= {found.value, *found.conflicting} - {None}
+        for question in fact.questions:
+            assert not any(re.search(rf"\b{re.escape(v)}\b", question.lower()) for v in values), fact.fact_id
 
 
 def test_retrieval_returns_document_chunk_metadata():
     chunks = load_knowledge_base(CORPUS, "kb_a")
-    result = Retriever(chunks).search("How long do authentication access tokens last?", 1)[0]
-    assert result.fact.source == "authentication.md"
+    result = Retriever(chunks).search("How long does an idempotency key remain valid?", 1)[0]
+    assert result.fact.source in {"payments.md", "faq.md"}
     assert isinstance(result.score, float)
-
-
-def test_knowledge_base_selection_is_explicit():
-    kb_a = load_knowledge_base(CORPUS, "kb_a")
-    kb_b = load_knowledge_base(CORPUS, "kb_b")
-    assert kb_a and kb_b
-    assert {chunk.source for chunk in kb_a} == {chunk.source for chunk in kb_b}
-    assert {chunk.text for chunk in kb_a} != {chunk.text for chunk in kb_b}
-
-
-def test_chunk_count_mismatch_is_aligned_without_failing(tmp_path):
-    """Inserted or deleted chunks must not abort A/B query generation."""
-    (tmp_path / "kb_a").mkdir()
-    (tmp_path / "kb_b").mkdir()
-    (tmp_path / "kb_a" / "doc.md").write_text("# Title\n\nParagraph one.\n\nParagraph two.")
-    (tmp_path / "kb_b" / "doc.md").write_text("# Title\n\nParagraph one.\n\nInserted paragraph.\n\nParagraph two.")
-    ka = load_knowledge_base(tmp_path, "kb_a")
-    kb = load_knowledge_base(tmp_path, "kb_b")
-    queries_a, queries_b = generate_document_queries(ka, kb)
-    assert len(queries_a) == len(ka)
-    assert len(queries_b) == len(ka)
-    assert [query.current_answer for query in queries_b] == [chunk.text for chunk in ka]

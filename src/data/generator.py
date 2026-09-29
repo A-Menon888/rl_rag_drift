@@ -1,17 +1,19 @@
 from dataclasses import dataclass
-from typing import Dict, List
 
 
 @dataclass(frozen=True)
 class Query:
     query_id: str
-    entity: str
-    attribute: str
+    fact_id: str
+    source: str
     text: str
-    memorized_answer: str   # KB-A text, frozen — models deployed agent's internal knowledge
-    current_answer: str     # ground-truth text for whichever KB this query is evaluated against
-    affected_by_drift: bool # True iff memorized_answer != current_answer
+    answer_pattern: str        # answer slot the reader extracts; never contains the value
+    memory_answer: str | None  # closed-book answer from the KB-0 memory snapshot; None = "don't know"
+    gold_answer: str | None    # value on the evaluated KB's owning page; None = unanswerable
+    drift_type: str            # KB-A -> KB-B change of this fact; "baseline" for KB-A queries
+                               # ("absent" = never documented: unanswerable, not drift)
+    memory_status: str         # unknown (no memory) | correct | stale, relative to gold_answer
 
-    def answer(self, version: int = 0) -> str:
-        """Compatibility shim used by env and tests. Always returns current_answer."""
-        return self.current_answer
+    @property
+    def affected_by_drift(self) -> bool:
+        return self.drift_type not in {"baseline", "unchanged", "absent"}

@@ -1,17 +1,29 @@
 import numpy as np
 
+from src.data.facts import extract_values
+
+
+def _states_gold(query, chunk):
+    return query.gold_answer in extract_values(query.answer_pattern, chunk.text)
+
 
 def retrieval_diagnostics(retriever, queries, top_k=3, version=0):
-    """Return auditable per-query ranking records for one KB snapshot."""
+    """Return auditable per-query ranking records for one KB snapshot.
+
+    A retrieved chunk is relevant when it states the query's gold value for its
+    answer slot. Unanswerable queries (gold None) have no relevant chunk.
+    """
     rows = []
     for query in queries:
         results = retriever.search(query, top_k)
-        expected = query.current_answer
-        rank = next((position + 1 for position, result in enumerate(results) if result.fact.text == expected), 0)
+        answerable = query.gold_answer is not None
+        rank = next((position + 1 for position, result in enumerate(results)
+                     if answerable and _states_gold(query, result.fact)), 0)
         rows.append({
             "query_id": query.query_id,
             "query": query.text,
-            "expected_chunk_id": next((fact.document_id for fact in retriever.facts if fact.text == expected), None),
+            "expected_chunk_id": next((fact.document_id for fact in retriever.facts
+                                       if answerable and fact.source == query.source and _states_gold(query, fact)), None),
             "rank": rank,
             "top_1_chunk_id": results[0].fact.document_id if results else None,
             "top_1_source": results[0].fact.source if results else None,
@@ -34,24 +46,27 @@ def summarize_retrieval_diagnostics(rows, top_k=3):
     }
 
 
-def summarize(infos, window=30, threshold=0.9):
+def summarize(infos):
+    """Per-episode metrics from the terminal info record of each question."""
     if not infos:
-        return {"accuracy": 0.0, "average_reward": 0.0, "retrieval_rate": 0.0, "retrieval_cost": 0.0,
-                "drifted_accuracy": None, "stable_accuracy": None}
-    rewards = np.array([item["reward"] for item in infos])
-    correct = np.array([item["correct"] for item in infos])
-
-    # Drift-aware breakdown — only when info records carry the field
-    drifted = [item for item in infos if item.get("affected_by_drift") is True]
-    stable  = [item for item in infos if item.get("affected_by_drift") is False]
-    drifted_accuracy = float(np.mean([i["correct"] for i in drifted])) if drifted else None
-    stable_accuracy  = float(np.mean([i["correct"] for i in stable]))  if stable  else None
-
+        return {}
+    def mean(values):
+        values = list(values)
+        return float(np.mean(values)) if values else None
+    drifted = [item for item in infos if item["affected_by_drift"]]
+    stable = [item for item in infos if not item["affected_by_drift"]]
     return {
-        "accuracy": float(correct.mean()),
-        "average_reward": float(rewards.mean()),
-        "retrieval_rate": float(np.mean([item["action"] for item in infos])),
-        "retrieval_cost": float(np.mean([item["retrieval_cost"] for item in infos])),
-        "drifted_accuracy": drifted_accuracy,
-        "stable_accuracy": stable_accuracy,
+        "accuracy": mean(item["correct"] for item in infos),
+        "average_reward": mean(item["episode_return"] for item in infos),
+        "average_searches": mean(item["searches"] for item in infos),
+        "retrieval_rate": mean(item["searches"] > 0 for item in infos),
+        "retrieval_cost": mean(item["retrieval_cost"] for item in infos),
+        # Searched although closed-book answering was already correct.
+        "unnecessary_retrieval_rate": mean(
+            item["searches"] > 0 and item["memory_status"] == "correct" and item["answerable"] for item in infos),
+        "give_up_rate": mean(item["final_action"] == "give_up" for item in infos),
+        "wrong_answer_rate": mean(item["final_action"] == "answer" and not item["correct"] for item in infos),
+        "unanswerable_accuracy": mean(item["correct"] for item in infos if not item["answerable"]),
+        "drifted_accuracy": mean(item["correct"] for item in drifted),
+        "stable_accuracy": mean(item["correct"] for item in stable),
     }

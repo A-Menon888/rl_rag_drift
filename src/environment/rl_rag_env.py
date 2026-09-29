@@ -1,82 +1,139 @@
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-from src.generation.mock import MockAnswerGenerator
+from src.generation.mock import MockAnswerGenerator, evidence_candidates
 from src.retrieval.retriever import Retriever
+
+SEARCH_MORE, ANSWER, GIVE_UP = 0, 1, 2
+ACTION_NAMES = ("search_more", "answer", "give_up")
+
+# Policy-visible features appended to the query embedding. Each comes from the
+# question, the retrieved evidence, or the frozen generator's own outputs;
+# none uses the gold answer, drift type, or which page owns the fact.
+FEATURES = (
+    "searches_used",                # searches so far / max_searches
+    "can_search",                   # the retrieval budget allows another SEARCH_MORE
+    "memory_has_answer",            # closed-book generator would answer (not "don't know")
+    "evidence_has_answer",          # some retrieved chunk states the answer slot
+    "evidence_conflict",            # retrieved chunks state more than one distinct value
+    "evidence_agrees_with_memory",  # reader's evidence-based answer equals the memory answer
+    "last_search_new_value",        # the latest search revealed a value not seen before
+    "best_score",                   # highest retrieval similarity among retrieved chunks
+    "last_search_score",            # highest retrieval similarity in the latest search
+)
 
 
 class RLRAGEnv(gym.Env):
+    """One episode = one question.
+
+    SEARCH_MORE reveals the next `top_k` unseen chunks of the question's
+    ranking (paged search) at `search_cost`; it is masked once `max_searches`
+    searches have been made. ANSWER asks the frozen reader to answer from the
+    evidence gathered so far (closed-book if there is none). GIVE_UP abstains.
+    ANSWER and GIVE_UP end the episode.
+
+    Terminal rewards: ANSWER -> correct_reward if the answer equals the gold
+    value, else incorrect_reward (including answering an unanswerable question).
+    GIVE_UP -> correct_reward on an unanswerable question, else give_up_reward.
+    """
+
     metadata = {"render_modes": []}
 
-    def __init__(self, queries, snapshots, drift_events=None, seed=7, retrieval_cost=0.10, correct_reward=1.0, incorrect_reward=-1.0, top_k=3):
-        self.queries = queries
-        self.snapshots = snapshots
-        self.retrieval_cost = retrieval_cost
+    def __init__(self, queries, chunks, *, top_k=3, max_searches=3, search_cost=0.10,
+                 correct_reward=1.0, incorrect_reward=-1.0, give_up_reward=0.0):
+        self.queries = list(queries)
+        self.retriever = Retriever(chunks)
+        self.generator = MockAnswerGenerator()
+        self.top_k = top_k
+        self.max_searches = max_searches
+        self.search_cost = search_cost
         self.correct_reward = correct_reward
         self.incorrect_reward = incorrect_reward
-        self.top_k = top_k
-        self.action_space = spaces.Discrete(2)
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(388,), dtype=np.float32)
-        self.generator = MockAnswerGenerator()
-        self.t = 0
-        self.recent_rewards = []
-        self.recent_retrievals = []
-        self.database_version = 0
-        self.cache = {}
-        self.retriever = Retriever(self.snapshots[0])
-
-    def _state(self, query):
-        embedding = self.retriever.embedder.encode([query.text])[0]
-        cache_available = float(query.query_id in self.cache)
-        return np.concatenate([
-            embedding,
-            [
-                self.recent_rewards[-1] if self.recent_rewards else 0.0,
-                np.mean(self.recent_retrievals[-20:]) if self.recent_retrievals else 0.0,
-                float(self.database_version),
-                cache_available,
-            ]
-        ]).astype(np.float32)
+        self.give_up_reward = give_up_reward
+        dimension = self.retriever.embedder.encode(["dimension probe"]).shape[1]
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(dimension + len(FEATURES),), dtype=np.float32)
+        self.action_space = spaces.Discrete(len(ACTION_NAMES))
+        self._cursor = 0
 
     def reset(self, *, seed=None, options=None):
+        """Start the question at options["query_index"], or the next one in order."""
         super().reset(seed=seed)
-        self.t = 0
-        self.database_version = 0
-        self.recent_rewards, self.recent_retrievals = [], []
-        self.cache = {}
-        self.retriever = Retriever(self.snapshots[0])
-        return self._state(self.queries[0]), {"database_version": 0}
+        index = (options or {}).get("query_index", self._cursor)
+        self._cursor = (index + 1) % len(self.queries)
+        self.query = self.queries[index]
+        self._query_vector = self.retriever.embedder.encode([self.query.text])[0]
+        self._ranking = self.retriever.search(self.query, self.top_k * self.max_searches)
+        self.evidence = []
+        self.searches = 0
+        self._best_score = self._last_score = 0.0
+        self._last_new_value = False
+        self._conflict_seen = False
+        return self._observation(), self._info()
+
+    def action_mask(self) -> np.ndarray:
+        return np.array([self.searches < self.max_searches, True, True])
+
+    def _observation(self):
+        values = [value for value, _ in evidence_candidates(self.query, self.evidence)]
+        memory = self.query.memory_answer
+        evidence_answer = self.generator.generate(self.query, self.evidence) if values else None
+        features = [
+            self.searches / self.max_searches,
+            float(self.searches < self.max_searches),
+            float(memory is not None),
+            float(bool(values)),
+            float(len(set(values)) > 1),
+            float(evidence_answer is not None and evidence_answer == memory),
+            float(self._last_new_value),
+            self._best_score,
+            self._last_score,
+        ]
+        return np.concatenate([self._query_vector, features]).astype(np.float32)
+
+    def _info(self, **final):
+        return {"action_mask": self.action_mask(), "searches": self.searches, **final}
 
     def step(self, action):
-        query = self.queries[self.t % len(self.queries)]
         action = int(action)
-        cache_hit = action == 0 and query.query_id in self.cache
-        results = self.retriever.search(query, self.top_k) if action == 1 else []
-        context = self.cache.get(query.query_id) if cache_hit else [result.fact for result in results] if results else None
-        answer = self.generator.generate(query, context)
-        ground_truth = query.current_answer
-        correct = answer == ground_truth
-        if action == 1 and correct:
-            self.cache[query.query_id] = [result.fact for result in results]
-        retrieval_cost = self.retrieval_cost if action == 1 else 0.0
-        reward = (self.correct_reward if correct else self.incorrect_reward) - retrieval_cost
-        self.recent_rewards.append(reward)
-        self.recent_retrievals.append(action)
-        info = {
-            "query_id": query.query_id,
-            "action": action,
-            "answer": answer,
-            "ground_truth": ground_truth,
-            "correct": correct,
-            "reward": reward,
-            "database_version": self.database_version,
-            "drift_event": None,
-            "drift_rate": 0.0,
-            "retrieval_cost": retrieval_cost,
-            "cache_hit": cache_hit,
-            "cache_size": len(self.cache),
-            "affected_by_drift": query.affected_by_drift,
-        }
-        self.t += 1
-        next_query = self.queries[self.t % len(self.queries)]
-        return self._state(next_query), reward, False, False, info
+        if not self.action_mask()[action]:
+            raise ValueError(f"{ACTION_NAMES[action]} is unavailable: retrieval budget exhausted")
+
+        if action == SEARCH_MORE:
+            start = self.searches * self.top_k
+            batch = self._ranking[start:start + self.top_k]
+            seen = {value for value, _ in evidence_candidates(self.query, self.evidence)}
+            self.evidence += [result.fact for result in batch]
+            self.searches += 1
+            new_values = {value for value, _ in evidence_candidates(self.query, [r.fact for r in batch])}
+            self._last_new_value = bool(new_values - seen)
+            self._last_score = max((result.score for result in batch), default=0.0)
+            self._best_score = max(self._best_score, self._last_score)
+            self._conflict_seen = len(seen | new_values) > 1
+            return self._observation(), -self.search_cost, False, False, self._info()
+
+        gold = self.query.gold_answer
+        if action == ANSWER:
+            answer = self.generator.generate(self.query, self.evidence)
+            correct = answer is not None and answer == gold
+            reward = self.correct_reward if correct else self.incorrect_reward
+        else:
+            answer = None
+            correct = gold is None
+            reward = self.correct_reward if correct else self.give_up_reward
+        retrieval_cost = self.search_cost * self.searches
+        info = self._info(
+            query_id=self.query.query_id,
+            final_action=ACTION_NAMES[action],
+            answer=answer,
+            ground_truth=gold,
+            correct=correct,
+            terminal_reward=reward,
+            episode_return=reward - retrieval_cost,
+            retrieval_cost=retrieval_cost,
+            evidence_conflict=self._conflict_seen,
+            answerable=gold is not None,
+            drift_type=self.query.drift_type,
+            memory_status=self.query.memory_status,
+            affected_by_drift=self.query.affected_by_drift,
+        )
+        return self._observation(), reward, True, False, info

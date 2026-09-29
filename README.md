@@ -15,13 +15,13 @@ Outputs are written to `results/metrics/`, `results/figures/`, and `results/chec
 
 ## Design
 
-Knowledge Base A is the local Markdown corpus in `data/documentation/`, covering authentication, users, payments, deployment, and database configuration. The document loader turns paragraphs into metadata-preserving chunks and creates deterministic factual queries from those chunks. Knowledge Base B and drift adaptation are intentionally deferred.
+`data/documentation/` holds three Markdown snapshots: `kb_0` (what the frozen generator saw before its training cutoff, used only as closed-book memory), `kb_a` (the deployed knowledge base) and `kb_b` (the drifted knowledge base). `facts.yaml` names each fact's answer slot with a regex on its owning page, plus hand-written questions. Values, drift types (unchanged, modified, contradicted, added, removed) and memory status (correct, stale, unknown) are extracted from the snapshots, not labelled by hand.
 
-The Gymnasium environment has two actions: `0 = DIRECT` and `1 = RETRIEVE`. The observation contains a compact query embedding, recent reward, recent retrieval frequency, and database version. Ground truth is used only to calculate reward. Correct answers earn +1, incorrect answers earn -1, and retrieval costs 0.10 by default.
+One episode is one question. The Gymnasium environment has three actions: SEARCH_MORE reveals the next unseen chunks of the question's ranking (paged search, with a per-question budget and a cost per search), ANSWER asks the frozen reader to answer from the evidence so far (or from memory if there is none), and GIVE_UP abstains, which is correct for questions the documentation does not answer. The observation is the query embedding plus features computed from the retrieved evidence and the generator's own outputs; ground truth is used only for reward.
 
-Retrieval uses sentence-transformers with FAISS when available. A deterministic hashed-vector fallback keeps the initial experiment runnable without downloading model weights. The mock generator returns the current top retrieved fact or the query's stale direct answer.
+Retrieval uses sentence-transformers with FAISS when available. A deterministic hashed-vector fallback keeps the initial experiment runnable without downloading model weights. The mock generator is a deterministic slot reader: closed-book it returns the KB-0 memory value (or abstains), and open-book it returns the first value for the question's slot found in the retrieved chunks, in rank order.
 
-Baselines are always-direct, always-retrieve, random, and a trainable REINFORCE MLP. Results intentionally do not assume RL wins. The current runner reports accuracy, reward, retrieval rate, and retrieval cost and produces reward plots; the CSV is the source of truth for analysis.
+Baselines are answer-directly, search-once, search-all and random, alongside a trainable REINFORCE MLP with action masking. Results intentionally do not assume RL wins. The CSV is the source of truth for analysis.
 
 ## Limitations and extensions
 
