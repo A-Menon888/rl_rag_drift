@@ -250,6 +250,487 @@ facts:
       - Which port does the authentication service use in local development?
       - What port should I expect the auth service on when running it locally?
 
+  # ── configuration.md ─────────────────────────────────────────────────────
+  - id: config.default_environment
+    source: configuration.md
+    pattern: 'runs in the `(\w+)` environment by default'
+    questions:
+      - Which environment does the application start in when none is chosen?
+      - What is the default runtime environment?
+
+  - id: config.env_variable
+    source: configuration.md
+    pattern: 'environment is selected with the `(\w+)` variable'
+    questions:
+      - Which variable selects the runtime environment?
+      - What do I set to switch the application between environments?
+
+  - id: config.valid_environments
+    source: configuration.md
+    pattern: 'Valid environment values are ([^\n]+)'
+    questions:
+      - Which environment names are accepted by the application?
+      - What are the allowed values for the environment setting?
+
+  - id: config.server_port
+    source: configuration.md
+    pattern: 'listens on port `(\d+)`'
+    questions:
+      - Which port does the application listen on?
+      - What port do I connect to when reaching the server?
+
+  - id: config.request_timeout
+    source: configuration.md
+    pattern: 'server request timeout is `(\d+)` seconds'
+    questions:
+      - How long can a server request run before it times out?
+      - What is the request timeout of the server?
+
+  - id: config.max_body_size
+    source: configuration.md
+    pattern: 'maximum request body size is `(\d+ MB)`'
+    questions:
+      - What is the largest request body the server accepts?
+      - How big can an incoming request payload be?
+
+  - id: config.db_pool_size
+    source: configuration.md
+    pattern: 'maximum size of `(\d+)` connections'
+    questions:
+      - How many connections can the database pool hold at most?
+      - What is the upper limit on the database connection pool?
+
+  - id: config.db_timeout
+    source: configuration.md
+    pattern: 'database connection timeout is `(\d+)` seconds'
+    questions:
+      - How long does the application wait when connecting to the database?
+      - What is the timeout for opening a database connection?
+
+  - id: config.log_level
+    source: configuration.md
+    pattern: 'default log level is `(\w+)`'
+    questions:
+      - Which log level is used unless configured otherwise?
+      - What is the default verbosity of application logging?
+
+  - id: config.log_format
+    source: configuration.md
+    pattern: 'writes logs in (\w+) format'
+    questions:
+      - In what format does the application write its logs?
+      - Are the application logs plain text or structured?
+
+  - id: config.dashboard_default
+    source: configuration.md
+    pattern: 'new dashboard is (\w+) by default'
+    questions:
+      - Is the new dashboard turned on out of the box?
+      - What is the default state of the new dashboard?
+
+  - id: config.dashboard_flag
+    source: configuration.md
+    pattern: 'feature flag for the new dashboard is `(\w+)`'
+    questions:
+      - Which feature flag controls the new dashboard?
+      - What is the name of the flag that toggles the new dashboard?
+
+  - id: config.bulk_import_flag
+    source: configuration.md
+    pattern: 'also supports the `(\w+)` feature flag'
+    questions:
+      - Which additional feature flag does the application support?
+      - Besides the dashboard flag, which other feature flag exists?
+
+  # ── security.md ──────────────────────────────────────────────────────────
+  - id: security.min_tls_version
+    source: security.md
+    pattern: 'minimum supported TLS version is `([\d.]+)`'
+    questions:
+      - What is the oldest TLS version the service will negotiate?
+      - Which protocol version is the lowest allowed for encrypted connections?
+
+  - id: security.hsts_max_age
+    source: security.md
+    pattern: 'HSTS max-age is `(\d+)` seconds'
+    questions:
+      - How long should browsers remember to use HTTPS only?
+      - What max-age does the HSTS policy specify?
+
+  - id: security.encryption_at_rest
+    source: security.md
+    pattern: 'Data at rest is encrypted with `([^`]+)`'
+    questions:
+      - Which cipher protects stored data?
+      - How is data encrypted when it is not being transmitted?
+
+  - id: security.password_hash
+    source: security.md
+    pattern: 'Passwords are hashed with `(\w+)`'
+    questions:
+      - Which algorithm is used to hash stored passwords?
+      - How are user passwords protected in the database?
+
+  - id: security.token_lifetime
+    source: security.md
+    pattern: 'Access tokens expire after `(\d+)` minutes'
+    questions:
+      - How long is an access token valid?
+      - After how much time does an access token stop working?
+
+  - id: security.key_rotation
+    source: security.md
+    pattern: 'API keys must be rotated every `(\d+)` days'
+    questions:
+      - How often do API keys have to be rotated?
+      - What is the maximum age of an API key before it must be replaced?
+
+  - id: security.admin_mfa
+    source: security.md
+    pattern: 'Multi-factor authentication is `(\w+)` for administrator accounts'
+    questions:
+      - What is the multi-factor authentication policy for administrators?
+      - Do administrator accounts have to use MFA?
+
+  - id: security.legacy_token_header
+    source: security.md
+    pattern: 'The `([\w-]+)` header is accepted for legacy authentication'
+    questions:
+      - Which header can still be used for legacy authentication?
+      - How can older clients authenticate with a legacy token?
+
+  - id: security.sso_protocol
+    source: security.md
+    pattern: 'Single sign-on is supported using the `(\w+)` protocol'
+    questions:
+      - Which protocol does single sign-on use?
+      - How can users sign in through an external identity provider?
+
+  - id: security.webhook_signature_header
+    source: security.md
+    pattern: 'Webhook payloads are signed using the `([\w-]+)` header'
+    questions:
+      - Which header carries the signature of a webhook payload?
+      - How can a receiver verify that a webhook came from us?
+
+  - id: security.csp_mode
+    source: security.md
+    pattern: 'default Content Security Policy mode is `([\w-]+)`'
+    questions:
+      - In which mode does the Content Security Policy run by default?
+      - Does the default browser content policy block violations or only log them?
+
+  - id: security.audit_retention
+    source: security.md
+    pattern: 'Security audit logs are retained for `(\d+)` days'
+    questions:
+      - How long are security audit logs kept?
+      - What is the retention period for audit records?
+
+  - id: security.report_contact
+    source: security.md
+    pattern: 'vulnerabilities are reported to `([^`]+)`'
+    questions:
+      - Where should a security vulnerability be reported?
+      - Which address receives vulnerability disclosures?
+
+  # ── deployment.md ────────────────────────────────────────────────────────
+  - id: deployment.base_image
+    source: deployment.md
+    pattern: 'container image based on `([\w.-]+)`'
+    questions:
+      - Which base image does the application container build on?
+      - What is the container image derived from?
+
+  - id: deployment.orchestrator
+    source: deployment.md
+    pattern: 'Deployments are orchestrated with `(\w+)`'
+    questions:
+      - Which platform orchestrates the deployments?
+      - What system manages the running containers?
+
+  - id: deployment.primary_region
+    source: deployment.md
+    pattern: 'primary deployment region is `([\w-]+)`'
+    questions:
+      - In which region is the application primarily deployed?
+      - Where does the main deployment run?
+
+  - id: deployment.default_replicas
+    source: deployment.md
+    pattern: 'default number of replicas is `(\d+)`'
+    questions:
+      - How many replicas run by default?
+      - How many copies of the application does a deployment start with?
+
+  - id: deployment.release_strategy
+    source: deployment.md
+    pattern: 'Releases use a `([\w-]+)` deployment strategy'
+    questions:
+      - How are new releases rolled out?
+      - Which rollout approach is used when shipping a release?
+
+  - id: deployment.freeze_day
+    source: deployment.md
+    pattern: 'Deployments are frozen on `(\w+)`'
+    questions:
+      - On which day of the week are deployments not allowed?
+      - Is there a weekday when releases are frozen?
+
+  - id: deployment.autoscaling_threshold
+    source: deployment.md
+    pattern: 'autoscaling is triggered above `(\d+)` percent'
+    questions:
+      - At what CPU utilization does horizontal autoscaling kick in?
+      - What load level causes additional instances to be started?
+
+  - id: deployment.cpu_limit
+    source: deployment.md
+    pattern: 'limited to `(\d+)` CPU cores'
+    questions:
+      - How many CPU cores is each instance allowed to use?
+      - What is the CPU limit per instance?
+
+  - id: deployment.memory_limit
+    source: deployment.md
+    pattern: 'limited to `(\d+ GB)` of memory'
+    questions:
+      - How much memory can each instance use?
+      - What is the per-instance memory limit?
+
+  - id: deployment.health_endpoint
+    source: deployment.md
+    pattern: 'health check endpoint is `(/\w+)`'
+    questions:
+      - Which path do health checks call?
+      - Where can an operator probe whether an instance is alive?
+
+  - id: deployment.readiness_interval
+    source: deployment.md
+    pattern: 'readiness probe runs every `(\d+)` seconds'
+    questions:
+      - How often does the readiness probe run?
+      - How frequently is an instance checked for readiness?
+
+  - id: deployment.secrets_source
+    source: deployment.md
+    pattern: 'Secrets are loaded from `([\w-]+)`'
+    questions:
+      - Where does the application get its secrets from?
+      - How are secrets supplied to a running instance?
+
+  - id: deployment.backup_interval
+    source: deployment.md
+    pattern: 'Database backups run every `(\d+)` hours'
+    questions:
+      - How often are database backups taken?
+      - What is the interval between database backups?
+
+  - id: deployment.artifact_signing
+    source: deployment.md
+    pattern: 'artifacts are signed with `(\w+)`'
+    questions:
+      - Which tool signs the deployment artifacts?
+      - How is the authenticity of a deployment artifact ensured?
+
+  # ── sessions.md ──────────────────────────────────────────────────────────
+  - id: sessions.store
+    source: sessions.md
+    pattern: 'Sessions are stored in `([\w-]+)`'
+    questions:
+      - Where are user sessions persisted?
+      - Which backend holds session state?
+
+  - id: sessions.data_limit
+    source: sessions.md
+    pattern: 'Session data is limited to `(\d+ KB)`'
+    questions:
+      - How much data can be stored in a single session?
+      - What is the size cap on session data?
+
+  - id: sessions.purge_interval
+    source: sessions.md
+    pattern: 'Expired sessions are purged every `(\d+)` minutes'
+    questions:
+      - How often are expired sessions cleaned up?
+      - What is the interval between purges of stale sessions?
+
+  - id: sessions.max_lifetime
+    source: sessions.md
+    pattern: 'maximum session lifetime is `(\d+)` hours'
+    questions:
+      - How long can a session last in total, regardless of activity?
+      - What is the longest a session may live?
+
+  - id: sessions.concurrent_limit
+    source: sessions.md
+    pattern: 'up to `(\d+)` concurrent sessions'
+    questions:
+      - How many simultaneous sessions can one user hold?
+      - What is the per-user limit on parallel logins?
+
+  - id: sessions.remember_me_duration
+    source: sessions.md
+    pattern: 'remember-me cookie lasts `(\d+)` days'
+    questions:
+      - How long does a remember-me cookie stay valid?
+      - For how many days can a user stay signed in without logging in again?
+
+  - id: sessions.revoke_path
+    source: sessions.md
+    pattern: 'Sessions can be revoked at `(/[\w/]+)`'
+    questions:
+      - Which path is used to revoke a session?
+      - Where can a user end one of their sessions remotely?
+
+  - id: sessions.id_length
+    source: sessions.md
+    pattern: 'Session identifiers are `(\d+)` bytes long'
+    questions:
+      - How long is a session identifier?
+      - How many bytes does a session ID contain?
+
+  - id: sessions.id_rotation
+    source: sessions.md
+    pattern: 'identifiers are rotated on `([\w-]+)`'
+    questions:
+      - When are session identifiers regenerated?
+      - Which events cause a new session ID to be issued?
+
+  - id: sessions.cookie_name
+    source: sessions.md
+    pattern: 'session cookie is named `([\w-]+)`'
+    questions:
+      - What is the name of the session cookie?
+      - Under which cookie name does the browser keep the session?
+
+  - id: sessions.cookie_samesite
+    source: sessions.md
+    pattern: 'SameSite attribute is `(\w+)`'
+    questions:
+      - Which SameSite setting does the session cookie use?
+      - How does the session cookie restrict cross-site sending?
+
+  - id: sessions.cookie_httponly
+    source: sessions.md
+    pattern: 'session cookie has the `(\w+)` flag'
+    questions:
+      - Which cookie flag stops scripts from reading the session cookie?
+      - What protective flag does the session cookie carry?
+
+  - id: sessions.cookie_transport
+    source: sessions.md
+    pattern: 'cookie is sent only over `(\w+)`'
+    questions:
+      - Over which protocol is the session cookie transmitted?
+      - Is the session cookie restricted to a particular transport?
+
+  - id: sessions.cookie_signing
+    source: sessions.md
+    pattern: 'Session cookies are signed with `([\w-]+)`'
+    questions:
+      - Which algorithm signs the session cookies?
+      - How is tampering with a session cookie detected?
+
+  # ── middleware.md ────────────────────────────────────────────────────────
+  - id: middleware.first_in_stack
+    source: middleware.md
+    pattern: 'first middleware in the stack is `([\w-]+)`'
+    questions:
+      - Which middleware runs first in the stack?
+      - What is the outermost middleware layer?
+
+  - id: middleware.request_id_header
+    source: middleware.md
+    pattern: 'Request IDs are read from the `([\w-]+)` header'
+    questions:
+      - Which header supplies an incoming request ID?
+      - Where does the application pick up a caller-provided request identifier?
+
+  - id: middleware.request_id_format
+    source: middleware.md
+    pattern: 'request IDs use the `(\w+)` format'
+    questions:
+      - In what format are new request IDs generated?
+      - What kind of identifier is created when a request arrives without one?
+
+  - id: middleware.cors_preflight_cache
+    source: middleware.md
+    pattern: 'CORS preflight response is cached for `(\d+)` seconds'
+    questions:
+      - How long can browsers cache a preflight response?
+      - What is the preflight cache duration?
+
+  - id: middleware.cors_credentials
+    source: middleware.md
+    pattern: 'CORS requests with credentials are `(\w+)`'
+    questions:
+      - Can cross-origin requests carry credentials?
+      - How are credentialed cross-origin requests treated?
+
+  - id: middleware.compression_algorithm
+    source: middleware.md
+    pattern: 'Responses are compressed with `(\w+)`'
+    questions:
+      - Which algorithm compresses responses?
+      - How is the response body compressed before sending?
+
+  - id: middleware.csrf_header
+    source: middleware.md
+    pattern: 'CSRF tokens are sent in the `([\w-]+)` header'
+    questions:
+      - Which header must carry the CSRF token?
+      - Where should a client place its anti-forgery token?
+
+  - id: middleware.csrf_exempt_path
+    source: middleware.md
+    pattern: 'CSRF protection is skipped for requests under `(/\w+)`'
+    questions:
+      - Which path prefix is exempt from CSRF checks?
+      - Are any routes excluded from anti-forgery protection?
+
+  - id: middleware.client_ip_header
+    source: middleware.md
+    pattern: 'client IP is read from the `([\w-]+)` header'
+    questions:
+      - Which header does the application trust for the client IP address?
+      - Where does the real client address come from behind a proxy?
+
+  - id: middleware.trusted_proxy_hops
+    source: middleware.md
+    pattern: 'Up to `(\d+)` trusted proxy hops are honored'
+    questions:
+      - How many proxy hops are trusted?
+      - How deep into a proxy chain does the application look?
+
+  - id: middleware.multipart_bodies
+    source: middleware.md
+    pattern: 'Multipart request bodies are `(\w+)`'
+    questions:
+      - Can clients send multipart form bodies?
+      - How does the server treat a multipart request body?
+
+  - id: middleware.timing_header
+    source: middleware.md
+    pattern: 'Response time is reported in the `([\w-]+)` header'
+    questions:
+      - Which response header reports how long the request took?
+      - Where can a client read the server-side processing time?
+
+  - id: middleware.error_body_format
+    source: middleware.md
+    pattern: 'Unhandled exceptions return `([\w-]+)` error bodies'
+    questions:
+      - In what format are error bodies returned for unhandled exceptions?
+      - What does the body of an internal error response look like?
+
+  - id: middleware.error_status
+    source: middleware.md
+    pattern: 'Unhandled exceptions return HTTP status `(\d{3})`'
+    questions:
+      - Which status code is returned for an unhandled exception?
+      - What HTTP code signals an unexpected server error?
+
   # ── never documented (absent in every snapshot) ─────────────────────────
   - id: payments.partial_refunds
     source: payments.md
@@ -271,3 +752,129 @@ facts:
     questions:
       - How many failed logins lock a user account?
       - After how many wrong passwords is a user locked out?
+
+  - id: api_base_url
+    source: api.md
+    pattern: '`(https://api\.acme\.dev/v\d+)`'
+    questions:
+      - "What is the base URL for the API?"
+      - "Which base URL should API requests use?"
+      - "Where should API requests be sent?"
+
+  - id: api_version
+    source: api.md
+    pattern: '`(/v\d+)` path identifies the current stable API version'
+    questions:
+      - "What version of the API is currently stable?"
+      - "Which API version is used by the current endpoints?"
+      - "What version does the stable API use?"
+
+  - id: user_create_endpoint
+    source: api.md
+    pattern: '`(POST /v\d+/users)`'
+    questions:
+      - "What endpoint creates a user?"
+      - "How do I create a user through the API?"
+      - "Which HTTP endpoint is used for user creation?"
+
+  - id: user_get_endpoint
+    source: api.md
+    pattern: '`(GET /v\d+/users/\{id\})`'
+    questions:
+      - "What endpoint retrieves a user?"
+      - "How can I retrieve a user by ID?"
+      - "Which API endpoint gets a specific user?"
+
+  - id: user_delete_endpoint
+    source: api.md
+    pattern: '`(DELETE /v\d+/users/\{id\})`'
+    questions:
+      - "What endpoint deletes a user?"
+      - "How do I delete a user?"
+      - "Which request removes a user?"
+
+  - id: user_list_limit
+    source: api.md
+    pattern: 'maximum number of users returned by a single list request is (\d+)'
+    questions:
+      - "How many users can one list request return?"
+      - "What is the maximum user list size?"
+      - "What is the user pagination limit?"
+
+  - id: payment_create_endpoint
+    source: api.md
+    pattern: '`(POST /v\d+/payments)`'
+    questions:
+      - "What endpoint creates a payment?"
+      - "How do I create a payment?"
+      - "Which API request is used to create payments?"
+
+  - id: payment_get_endpoint
+    source: api.md
+    pattern: '`(GET /v\d+/payments/\{id\})`'
+    questions:
+      - "What endpoint retrieves a payment?"
+      - "How can I retrieve a payment by ID?"
+      - "Which request gets a specific payment?"
+
+  - id: payment_idempotency
+    source: api.md
+    pattern: '`(Idempotency-Key)` header'
+    questions:
+      - "What header is required when creating a payment?"
+      - "Which header provides payment idempotency?"
+      - "What idempotency header does payment creation require?"
+
+  - id: payment_currencies
+    source: api.md
+    pattern: 'Supported payment currencies are ([^\n]+)'
+    questions:
+      - "Which currencies are supported for payments?"
+      - "What currencies can a payment use?"
+      - "Which payment currencies are supported?"
+
+  - id: api_rate_limit
+    source: api.md
+    pattern: 'default API rate limit is (\d+ requests per minute)'
+    questions:
+      - "What is the default API rate limit?"
+      - "How many requests per minute are allowed?"
+      - "What is the request limit per API key?"
+
+  - id: rate_limit_status
+    source: api.md
+    pattern: 'exceed the rate limit receive HTTP status `(\d{3})`'
+    questions:
+      - "What status is returned when the API rate limit is exceeded?"
+      - "Which HTTP status indicates too many requests?"
+      - "What happens when the API rate limit is exceeded?"
+
+  - id: create_status
+    source: api.md
+    pattern: 'Successful resource creation returns HTTP status `(\d{3})`'
+    questions:
+      - "What status code indicates successful resource creation?"
+      - "Which HTTP status is returned after creating a resource?"
+      - "What is the successful creation response code?"
+
+  - id: retrieve_status
+    source: api.md
+    pattern: 'Successful resource retrieval returns HTTP status `(\d{3})`'
+    questions:
+      - "What status code indicates successful resource retrieval?"
+      - "Which HTTP status is returned when retrieving a resource?"
+      - "What is the successful retrieval response code?"
+
+  - id: webhook_create_endpoint
+    source: api.md
+    pattern: '`(POST /v\d+/webhooks)`'
+    questions:
+      - What endpoint creates a webhook subscription?
+      - How do I subscribe to webhook notifications through the API?
+
+  - id: webhook_delete_endpoint
+    source: api.md
+    pattern: '`(DELETE /v\d+/webhooks/\{id\})`'
+    questions:
+      - What endpoint deletes a webhook subscription?
+      - How can I cancel a webhook subscription?
