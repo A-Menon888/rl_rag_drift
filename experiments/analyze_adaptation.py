@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_Z_VALUE = 1.96
 DEFAULT_ALPHA = 0.05
 DEFAULT_POWER = 0.80
+ADAPTED_POLICY = "dpo_policy"  # the adaptation arm compared against full retraining
 
 
 def read_csv(path):
@@ -27,14 +28,16 @@ def read_csv(path):
         return list(csv.DictReader(handle))
 
 
-def _policy_accuracy(rows, policy, knowledge_base="kb_b"):
+def _policy_accuracy(rows, policy, knowledge_base="kb_b", split="test"):
+    """Held-out (test-split) accuracy; rows without a split column predate splits."""
     matches = [
         row for row in rows
         if row["policy"] == policy and row["knowledge_base"] == knowledge_base
+        and row.get("split", "test") == split
     ]
     if len(matches) != 1:
         raise ValueError(
-            f"Expected one {policy}/{knowledge_base} row, found {len(matches)}"
+            f"Expected one {policy}/{knowledge_base}/{split} row, found {len(matches)}"
         )
     return float(matches[0]["accuracy"])
 
@@ -66,7 +69,7 @@ def load_seed_pairs(metrics_root, n_seeds=None, base_seed=0):
         pairs.append({
             "seed": seed,
             "old_policy_accuracy": _policy_accuracy(rows, "old_policy"),
-            "adapted_policy_accuracy": _policy_accuracy(rows, "adapted_policy"),
+            "adapted_policy_accuracy": _policy_accuracy(rows, ADAPTED_POLICY),
             "full_retrain_policy_accuracy": _policy_accuracy(rows, "full_retrain_policy"),
         })
     if len(pairs) < 2:
@@ -207,7 +210,7 @@ def bootstrap_query_accuracy(
                 f"Missing query-level records for seed {seed}: {path}. Re-run run_seeds.py."
             )
         rows = read_csv(path)
-        adapted = np.asarray([int(row["adapted_policy_correct"]) for row in rows], dtype=float)
+        adapted = np.asarray([int(row[f"{ADAPTED_POLICY}_correct"]) for row in rows], dtype=float)
         retrain = np.asarray([int(row["full_retrain_policy_correct"]) for row in rows], dtype=float)
         if not len(adapted) or len(adapted) != len(retrain):
             raise ValueError(f"Invalid paired query records for seed {seed}")

@@ -33,6 +33,13 @@ class RLAgent:
         mask = torch.as_tensor(np.asarray(action_mask, dtype=bool))
         return torch.distributions.Categorical(logits=logits.masked_fill(~mask, float("-inf")))
 
+    def save(self, path):
+        torch.save(self.policy.state_dict(), path)
+
+    def load(self, path):
+        self.policy.load_state_dict(torch.load(path, weights_only=True))
+        return self
+
     def act(self, observation, info, explore=True):
         with torch.no_grad():
             distribution = self._distribution(observation, info["action_mask"])

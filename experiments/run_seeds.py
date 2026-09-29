@@ -42,12 +42,12 @@ def aggregate_rows(seed_rows):
     grouped = {}
     for rows in seed_rows:
         for row in rows:
-            key = (row["policy"], row["knowledge_base"])
+            key = (row["policy"], row["knowledge_base"], row.get("split", "test"))
             grouped.setdefault(key, []).append(row)
 
     aggregate = []
-    for (policy, knowledge_base), rows in sorted(grouped.items()):
-        output = {"policy": policy, "knowledge_base": knowledge_base}
+    for (policy, knowledge_base, split), rows in sorted(grouped.items()):
+        output = {"policy": policy, "knowledge_base": knowledge_base, "split": split}
         for metric in METRICS:
             values = _numeric_values(rows, metric)
             output[f"{metric}_mean"] = statistics.fmean(values) if values else ""
@@ -190,7 +190,7 @@ def main():
 
     print("\n--- Multi-seed summary (accuracy and retrieval rate) ---")
     for row in aggregate:
-        print(f"{row['policy']:<24} {row['knowledge_base']:<5} "
+        print(f"{row['policy']:<24} {row['knowledge_base']:<5} {row['split']:<5} "
               f"accuracy={float(row['accuracy_mean']):.3f} +/- {float(row['accuracy_std']):.3f} "
               f"retrieval_rate={float(row['retrieval_rate_mean']):.3f} +/- "
               f"{float(row['retrieval_rate_std']):.3f}")

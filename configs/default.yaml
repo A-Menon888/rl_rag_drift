@@ -1,9 +1,12 @@
 seed: 7
 corpus_dir: data/documentation
 facts_path: data/documentation/facts.yaml
+test_fraction: 0.4   # share of facts held out per drift type (fact-level split)
+split_seed: 0        # fixed across training seeds, so all seeds share one test set
 knowledge_bases: [kb_a, kb_b]
 top_k: 1            # chunks revealed per SEARCH_MORE (paged search)
 max_searches: 3     # retrieval budget per question
+observe_query_embedding: false  # true = ablation: prepend the query embedding to FEATURES
 use_semantic_embeddings: true
 embedding_model: all-MiniLM-L6-v2
 # Set this to true only when an explicit deterministic offline fallback is desired.
@@ -16,5 +19,10 @@ retrieval_cost: 0.10   # per SEARCH_MORE
 correct_reward: 1.0
 incorrect_reward: -1.0
 give_up_reward: 0.0  # GIVE_UP on an answerable question (correct_reward if unanswerable)
+# DPO adaptation of the frozen KB-A policy from KB-B train trajectory pairs
+dpo_epochs: 20
+dpo_batch_size: 32
+dpo_beta: 0.1
+dpo_learning_rate: 0.001
 approval_margin: 0.0
 rolling_window: 30

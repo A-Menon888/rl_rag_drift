@@ -5,6 +5,7 @@ import pytest
 from src.data.documents import load_knowledge_base
 from src.data.facts import (
     DRIFT_TYPES, Fact, FactValue, build_fact_queries, drift_type, fact_value, load_facts, memory_status,
+    select_facts, split_facts,
 )
 from src.retrieval.retriever import Retriever
 
@@ -125,3 +126,25 @@ def test_retrieval_returns_document_chunk_metadata():
     result = Retriever(chunks).search("How long does an idempotency key remain valid?", 1)[0]
     assert result.fact.source in {"payments.md", "faq.md"}
     assert isinstance(result.score, float)
+
+
+def test_fact_split_is_disjoint_stratified_and_keeps_paraphrases_together():
+    queries_a, queries_b = _make_queries()
+    train, test = split_facts(queries_b, test_fraction=0.4, seed=0)
+    assert train and test and not train & test
+    assert train | test == {query.fact_id for query in queries_b}
+    for split in (train, test):
+        assert {q.drift_type for q in select_facts(queries_b, split)} == set(DRIFT_TYPES)
+    # Every question of a fact lands in the same split (no paraphrase leakage).
+    for fact_id in train | test:
+        in_test = {q.fact_id in test for q in queries_b if q.fact_id == fact_id}
+        assert len(in_test) == 1
+    # The KB-A test questions are a subset of the KB-B test questions (same held-out facts).
+    assert ({q.query_id for q in select_facts(queries_a, test)}
+            <= {q.query_id for q in select_facts(queries_b, test)})
+
+
+def test_fact_split_is_seeded():
+    _, queries_b = _make_queries()
+    assert split_facts(queries_b, 0.4, 0) == split_facts(queries_b, 0.4, 0)
+    assert any(split_facts(queries_b, 0.4, 0)[1] != split_facts(queries_b, 0.4, seed)[1] for seed in range(1, 5))

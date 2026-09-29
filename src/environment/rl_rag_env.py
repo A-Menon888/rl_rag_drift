@@ -7,9 +7,11 @@ from src.retrieval.retriever import Retriever
 SEARCH_MORE, ANSWER, GIVE_UP = 0, 1, 2
 ACTION_NAMES = ("search_more", "answer", "give_up")
 
-# Policy-visible features appended to the query embedding. Each comes from the
-# question, the retrieved evidence, or the frozen generator's own outputs;
-# none uses the gold answer, drift type, or which page owns the fact.
+# Policy-visible features. Each comes from the question, the retrieved
+# evidence, or the frozen generator's own outputs; none uses the gold answer,
+# drift type, or which page owns the fact. By default the observation is
+# exactly these features; the query embedding is an opt-in ablation because a
+# policy that sees it memorizes training questions instead of generalizing.
 FEATURES = (
     "searches_used",                # searches so far / max_searches
     "can_search",                   # the retrieval budget allows another SEARCH_MORE
@@ -32,6 +34,9 @@ class RLRAGEnv(gym.Env):
     evidence gathered so far (closed-book if there is none). GIVE_UP abstains.
     ANSWER and GIVE_UP end the episode.
 
+    The observation is FEATURES, preceded by the query embedding only when
+    `observe_query_embedding` is True (ablation).
+
     Terminal rewards: ANSWER -> correct_reward if the answer equals the gold
     value, else incorrect_reward (including answering an unanswerable question).
     GIVE_UP -> correct_reward on an unanswerable question, else give_up_reward.
@@ -40,7 +45,7 @@ class RLRAGEnv(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(self, queries, chunks, *, top_k=3, max_searches=3, search_cost=0.10,
-                 correct_reward=1.0, incorrect_reward=-1.0, give_up_reward=0.0):
+                 correct_reward=1.0, incorrect_reward=-1.0, give_up_reward=0.0, observe_query_embedding=False):
         self.queries = list(queries)
         self.retriever = Retriever(chunks)
         self.generator = MockAnswerGenerator()
@@ -50,7 +55,8 @@ class RLRAGEnv(gym.Env):
         self.correct_reward = correct_reward
         self.incorrect_reward = incorrect_reward
         self.give_up_reward = give_up_reward
-        dimension = self.retriever.embedder.encode(["dimension probe"]).shape[1]
+        self.observe_query_embedding = observe_query_embedding
+        dimension = self.retriever.embedder.encode(["dimension probe"]).shape[1] if observe_query_embedding else 0
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(dimension + len(FEATURES),), dtype=np.float32)
         self.action_space = spaces.Discrete(len(ACTION_NAMES))
         self._cursor = 0
@@ -61,7 +67,8 @@ class RLRAGEnv(gym.Env):
         index = (options or {}).get("query_index", self._cursor)
         self._cursor = (index + 1) % len(self.queries)
         self.query = self.queries[index]
-        self._query_vector = self.retriever.embedder.encode([self.query.text])[0]
+        self._query_vector = (self.retriever.embedder.encode([self.query.text])[0]
+                              if self.observe_query_embedding else np.empty(0, dtype=np.float32))
         self._ranking = self.retriever.search(self.query, self.top_k * self.max_searches)
         self.evidence = []
         self.searches = 0

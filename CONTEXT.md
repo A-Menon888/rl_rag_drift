@@ -26,11 +26,13 @@ src/retrieval/retriever.py     Top-k inner-product retrieval
 src/generation/mock.py         Deterministic slot reader (closed-book memory / open-book extraction)
 src/environment/rl_rag_env.py  Gymnasium environment: one question per episode, paged search with a budget
 src/agents/baselines.py        Answer-directly, search-N-then-answer, random policies
-src/agents/rl_agent.py         MLP policy and Monte Carlo REINFORCE
+src/agents/rl_agent.py         MLP policy, Monte Carlo REINFORCE, checkpoint save/load
+src/agents/dpo.py              Trajectory collection, preference pairs, DPO objective and training
 src/evaluation/metrics.py      Evaluation and retrieval metric helpers
 src/evaluation/plots.py        Matplotlib training-curve helper
 tests/test_documents.py        Document and retrieval tests
-tests/test_env.py              Environment, evaluation, and training tests
+tests/test_env.py              Environment, evaluation, training, config and end-to-end tests
+tests/test_dpo.py              Trajectory pairs, DPO objective/training, checkpoint round trip
 ```
 
 ## Where to work first
@@ -76,6 +78,10 @@ KB-B edits are exact, reviewable replacements: `/v2` endpoints, PUT -> PATCH, EU
 - `memory_status(memory, gold)`: `unknown` (memory has no answer), `correct`, or `stale` (a wrong value, including any value for an unanswerable question).
 - `build_fact_queries(facts, kb_0, kb_a, kb_b)`: KB-A queries cover facts documented in KB-A plus `absent` facts (no leakage of KB-B additions); KB-B queries cover every fact, so removed and absent facts are asked with `gold_answer=None`. It rejects questions containing any value of their fact.
 
+### Train/test split
+
+`split_facts(queries_b, test_fraction, seed)` splits **facts**, not questions, so paraphrases of one fact (same answer) never straddle the split. It is stratified by KB-B drift type: every type with two or more facts contributes at least one fact to each split. `select_facts(queries, fact_ids)` filters a query list. Both splits query the same full KB (documents are never split away from retrieval); only the questions differ. With `test_fraction: 0.4, split_seed: 0`: 22 train / 14 test facts; KB-A train 40 / test 24 questions; KB-B train 44 / test 28 questions; every drift type appears in both KB-B splits. The KB-A test questions are a subset of the KB-B test questions (same held-out facts; KB-B adds the held-out `added` facts). `split_seed` is fixed across training seeds, so all seeds share one test set.
+
 `Query` fields: `query_id`, `fact_id`, `source`, `text`, `answer_pattern`, `memory_answer`, `gold_answer`, `drift_type` (`baseline` on KB-A), `memory_status`, and the derived `affected_by_drift`.
 
 Current counts: 36 facts (3 never documented). KB-A has 64 queries (58 answerable; memory correct 40 / stale 12 / unknown 12). KB-B has 72 queries (62 answerable; unchanged 22, modified 26, contradicted 6, added 8, removed 4, absent 6; memory correct 18 / stale 34 / unknown 20).
@@ -117,14 +123,30 @@ The reader never knows which page owns a fact. So it is wrong when only a stale 
 - `reset(options={"query_index": i})` starts question `i` (default: the next in order). Episodes end on ANSWER or GIVE_UP.
 - Actions: `0 = SEARCH_MORE`, `1 = ANSWER`, `2 = GIVE_UP`. `action_mask()` / `info["action_mask"]` disables SEARCH_MORE after `max_searches`; stepping a masked action raises.
 - Rewards: SEARCH_MORE `-search_cost`. ANSWER `correct_reward` iff the answer equals gold (a non-None answer), else `incorrect_reward`, including answering an unanswerable question. GIVE_UP `correct_reward` on an unanswerable question, else `give_up_reward` (default 0, between right and wrong).
-- Observation: query embedding (384) + `FEATURES`: searches used, can search, memory has answer, evidence has answer, evidence conflict, evidence agrees with memory, last search revealed a new value, best score, last search score. All are computed from the question, the evidence, and the generator's own outputs; a test checks that relabelling gold/drift/memory status leaves observations unchanged.
+- Observation (default, `observe_query_embedding: false`): exactly `FEATURES`. With `observe_query_embedding: true` (ablation only) the 384-d query embedding is prepended. `FEATURES` are: searches used, can search, memory has answer, evidence has answer, evidence conflict, evidence agrees with memory, last search revealed a new value, best score, last search score. All are computed from the question, the evidence, and the generator's own outputs; a test checks that relabelling gold/drift/memory status leaves observations unchanged.
 - Terminal `info`: query ID, final action, answer, ground truth, correct, terminal reward, episode return, searches, retrieval cost, evidence conflict, answerable, drift type, memory status, `affected_by_drift`.
 
 The old cache, recent-reward/retrieval-rate features, database version and `drift_events` were removed.
 
 ## RL and baseline policies
 
-`PolicyNetwork` is `Linear(obs, 64) -> Tanh -> Linear(64, 3)`. `RLAgent.act(observation, info, explore)` samples from the masked categorical distribution (argmax when `explore=False`). `update()` is batched Monte Carlo REINFORCE: undiscounted rewards-to-go within each episode (never across questions), normalized over the batch as the baseline, plus an entropy bonus (`entropy_coef`). `train_policy()` runs `train_epochs` passes over the question set in a seeded random order, one update per `batch_size` episodes, and returns the per-epoch mean return.
+`PolicyNetwork` is `Linear(obs, 64) -> Tanh -> Linear(64, 3)` (obs = 9 by default). `RLAgent.save(path)` / `load(path)` write and read the policy state dict. `RLAgent.act(observation, info, explore)` samples from the masked categorical distribution (argmax when `explore=False`). `update()` is batched Monte Carlo REINFORCE: undiscounted rewards-to-go within each episode (never across questions), normalized over the batch as the baseline, plus an entropy bonus (`entropy_coef`). `train_policy()` runs `train_epochs` passes over the question set in a seeded random order, one update per `batch_size` episodes, and returns the per-epoch mean return.
+
+## DPO adaptation (`src/agents/dpo.py`)
+
+DPO adapts the retrieval policy only; the reader/generator stays frozen. Preferences are generated automatically from environment returns (no human feedback; not RLHF).
+
+1. **Reference and init:** both the frozen reference `pi_ref` and the trainable `pi_theta` are loaded from the saved old-policy checkpoint (`rl_old_policy_kb_a.pt`).
+2. **Trajectories:** for every KB-B **train** question, `collect_trajectories` rolls out all `2 * (max_searches + 1)` = 8 stopping strategies ("SEARCH_MORE s times, then ANSWER or GIVE_UP"), recording each step's policy observation, action mask and action, plus the episode return. These rollouts do not depend on `pi_ref`.
+3. **Pairs (one per question at most):** `rejected` is the candidate the frozen policy actually selects (`frozen_policy_actions`: its greedy action sequence, always one of the 8 candidates); `chosen` is the highest-return candidate (first in enumeration order on ties). A pair exists only when chosen return > frozen return **and** the two trajectories end in different answer outcomes (`Trajectory.outcome` = (final action, correct)): pairs that differ only in search count/retrieval cost are discarded; wrong->right, wrong->GIVE_UP, right->wrong and other outcome changes are kept. `dpo_pairs.csv` records each side's outcome. Returns use gold only as the RL reward does; they never enter observations.
+4. **Objective:** `log pi(tau) = sum_t log pi(a_t | s_t)` under the action mask (transition terms cancel), and
+   `L = -mean log sigmoid(beta * [(log pi_theta(tau_w) - log pi_ref(tau_w)) - (log pi_theta(tau_l) - log pi_ref(tau_l))])`,
+   with Adam, `dpo_epochs` passes over shuffled pairs in minibatches of `dpo_batch_size`.
+5. Outputs: `checkpoints/dpo_policy_kb_b.pt`, `metrics/dpo_pairs.csv` (every pair's action sequences and returns), a DPO loss curve, and budgets in `metadata.json` and summary rows.
+
+**Equal-data control (`rl_finetune_policy`):** REINFORCE fine-tuning from the same old-policy checkpoint on KB-B train with exactly DPO's environment episodes (352 = 8 epochs x 44 questions; asserted), same `batch_size`, `learning_rate`, `entropy_coef` as the other RL arms.
+
+Budget per run (default config): DPO-352 352 episodes, 20 gradient updates, 960 policy step evaluations (11 pairs from 44 questions). RL-352 352 episodes, 24 updates, about 680 step evaluations. Full RL retraining (unchanged) 13,200 episodes, 900 updates, about 34,000-40,000 step evaluations.
 
 Baselines: `answer_directly` (closed-book), `search_once` (1 search then answer), `search_all` (use the whole budget then answer), and seeded `random` over available actions.
 
@@ -132,23 +154,42 @@ Baselines: `answer_directly` (closed-book), `search_once` (1 search then answer)
 
 `experiments/run_all.py`:
 
-1. Loads KB-0/KB-A/KB-B and builds fact queries; prints counts per KB.
-2. Trains `old_policy` on KB-A, saves `rl_old_policy_kb_a.pt` and a training curve, and evaluates it (frozen, greedy) on KB-A and KB-B.
-3. Copies old weights into `adapted_policy` and trains it on KB-B (same epochs as a full retrain); trains `full_retrain_policy` from a fresh initialization on KB-B; evaluates both on KB-B.
-4. Evaluates the four baselines on both KBs.
-5. Computes baseline-relative decisions:
+1. Loads KB-0/KB-A/KB-B, builds fact queries, splits facts into train/test, and builds four environments: (kb_a, train), (kb_a, test), (kb_b, train), (kb_b, test). It asserts that no test fact is in a training environment and writes `split.json`.
+2. Trains `old_policy` on **KB-A train** questions, then evaluates it frozen (greedy) on KB-A train (fit), **KB-A test** (pre-drift baseline) and **KB-B test** (degradation on the same held-out facts).
+3. Builds `dpo_policy` by DPO and `rl_finetune_policy` (equal-data REINFORCE control) from the saved old-policy checkpoint using KB-B **train** questions (see DPO adaptation); trains `full_retrain_policy` with REINFORCE from a fresh initialization on KB-B train (unchanged); evaluates both on KB-B train and **KB-B test**.
+4. Evaluates the four baselines on KB-A test and KB-B test.
+5. Computes baseline-relative decisions on held-out rows:
 
 ```text
-approval: candidate accuracy > search_once/kb_b accuracy - approval_margin
-          and candidate retrieval cost <= search_once/kb_b cost + approval_margin
-recovery: candidate KB-B accuracy >= old_policy/kb_a accuracy
+approval: candidate kb_b/test accuracy > search_once/kb_b/test accuracy - approval_margin
+          and candidate retrieval cost <= search_once/kb_b/test cost + approval_margin
+recovery: candidate kb_b/test accuracy >= old_policy/kb_a/test accuracy
 ```
 
-The runner writes 12 CSV rows (old policy on A/B, adapted and full retrain on B, four baselines on A/B) with `accuracy`, `average_reward` (mean episode return), `average_searches`, `retrieval_rate` (episodes with at least one search), `retrieval_cost`, `unnecessary_retrieval_rate` (searched although closed-book memory was correct), `give_up_rate`, `wrong_answer_rate`, `unanswerable_accuracy`, `drifted_accuracy`, `stable_accuracy`, `training_final_return`, and the approval/recovery fields. The sidecar `kb_b_query_results.csv` has per-question `drift_type`, `memory_status`, and each trained policy's `_correct`, `_action` (final action) and `_searches`.
+No training ever happens on test questions of either KB.
 
-Fixed-strategy reference (deterministic, top_k=1, max_searches=3, search cost 0.10), accuracy/return: KB-A answer-directly 0.625/0.250, search-once 0.875/0.650, search-all 0.891/0.481, per-question oracle 0.984/0.956. KB-B answer-directly 0.250/-0.500, search-once 0.667/0.233, search-twice 0.778/0.356, search-all 0.806/0.311, oracle 0.944/0.872.
+The runner validates the config (`validate_config`: required keys and types), then writes 17 CSV rows keyed by `policy`, `knowledge_base` and `split` (old policy on kb_a train/test and kb_b test; `dpo_policy`, `rl_finetune_policy` and full retrain on kb_b train/test; four baselines on kb_a/kb_b test) with `accuracy`, `average_reward` (mean episode return), `average_searches`, `retrieval_rate` (episodes with at least one search), `retrieval_cost`, `unnecessary_retrieval_rate` (searched although closed-book memory was correct), `give_up_rate`, `wrong_answer_rate`, `unanswerable_accuracy`, `drifted_accuracy`, `stable_accuracy`, `training_final_return`, the budget fields `adaptation_episodes`, `gradient_updates`, `policy_step_evaluations` (for rows of the policy's training KB), and the approval/recovery fields. `metadata.json` records the observation definition (flag, feature names, dimension) and the DPO/full-retrain/old-policy budgets. The sidecar `kb_b_query_results.csv` covers KB-B **test** questions only, with per-question `drift_type`, `memory_status`, and each trained policy's `_correct`, `_action` (final action) and `_searches`.
 
-The 2026-09-29 single-seed default run (seed 7, 300 epochs, batch 16, about 5 minutes), accuracy/return: old policy on KB-A 0.984/0.950 (0.34 searches per question, gives up on all unanswerable questions). Frozen on KB-B 0.597/0.183 with a 0.375 wrong-answer rate: it keeps trusting stale memory (modified 0.42, contradicted 0.17, added 0.25, removed 0.25; unchanged and absent 1.00). Continued REINFORCE (adapted) 0.847/0.685; full retrain 0.944/0.839. Full retrain resolves all contradictions by searching (1.8 searches); adapted stays at 0.17 on contradictions. The retrain policy gives up on removed facts without searching, which it can only know by memorizing the question: evidence of per-question memorization while training and evaluation use the same questions. Single seed; not a generalization claim. Results under results/ predate this environment and are stale.
+Held-out results, 3 seeds (0-2), default config with outcome-changing pairs only, 2026-09-30, KB-B test facts:
+
+| row | acc | return | searches |
+|---|---|---|---|
+| old_policy kb_a test | 1.000 | 0.900 | 1.00 |
+| old_policy kb_b test (frozen) | 0.821 | 0.543 | 1.00 |
+| dpo_policy (DPO-352) | 0.821 | 0.542 (0.539, 0.543, 0.543) | 1.01 |
+| rl_finetune_policy (RL-352) | 0.821 | 0.543 | 1.00 |
+| full_retrain_policy | 0.929 | 0.682 | 1.75 |
+| search_once / search_all | 0.750 / 0.857 | 0.400 / 0.414 | 1 / 3 |
+
+- Pairs: 11 of 44 train questions, identical across seeds: `search+answer` (wrong) -> `search+search+answer` (right) x6 (contradictions and one modified), `search+answer` (wrong) -> `give_up` (answerable, 0 reward) x4, `search+answer` (wrong) -> 3 searches + answer (right) x1. DPO loss 0.693 -> about 0.61.
+- DPO-352 and RL-352 both leave behavior essentially at the frozen policy (DPO adds one extra search on one question in seed 0). Neither recovers contradictions (0/6); full RL recovers 6/6 but searches 2.5 times on unchanged facts (vs 1.0) to do so.
+- Observability: after one search, 3 of 4 contradicted train questions have exactly the same non-score features as 5 unchanged/memory-correct questions (the stale FAQ agrees with stale memory, so evidence_conflict = 0 and evidence_agrees_with_memory = 1); only retrieval scores differ. Learning "search again" there necessarily also costs on those questions.
+
+Earlier variants (same day, not current): "best vs every worse" pairs (308 pairs) gave DPO return -0.036; best-vs-frozen including cost-only pairs (29 pairs, 18 cost-only) gave 0.460 (0.543, 0.543, 0.293).
+
+Old policy, RL-352 and full retrain are deterministic enough that seed variation is near zero; varying `split_seed` would be needed to measure variance. `train_dpo` raises if a run yields zero pairs.
+
+With `observe_query_embedding: true` (ablation) the policy memorizes training questions and underperforms search-once on held-out facts (3 seeds, previous REINFORCE-adaptation pipeline: old policy kb_a train/test accuracy 0.975/0.653, return 0.923/0.449). Results under `results/` predate this pipeline and are stale.
 
 `experiments/run_seeds.py` reuses `run_experiment()` for independent deterministic seeds. `--config` selects the YAML configuration, `--n-seeds` defaults to 10, and `--base-seed` defaults to 0; `--jobs` optionally runs independent seeds in separate processes without changing their seed configuration, and `--resume` reuses a seed only when both its summary and paired query sidecar exist. Each seed writes `results/metrics/seed_<seed>/summary.csv`, checkpoints, figures, and config. It also writes `results/metrics/aggregate_summary.csv`, containing mean, sample standard deviation, minimum, maximum, and JSON raw per-seed values for accuracy, average reward, average searches, retrieval rate, retrieval cost, unnecessary retrieval rate, give-up rate, drifted accuracy, and stable accuracy. It prints mean +/- standard deviation for accuracy and retrieval rate. Queries no longer depend on the seed; `alignment_issues()` checks once that every KB-A query exists in KB-B with the same memory answer.
 
@@ -156,7 +197,7 @@ The 2026-09-29 single-seed default run (seed 7, 300 epochs, batch 16, about 5 mi
 
 Adapted and full-retrain evaluation within a seed use the same `queries_b` object and deterministic ordering. Each seed also writes the `kb_b_query_results.csv` sidecar described above. `run_seeds.py` accepts `--output-root` for isolated runs and `--retrieval-cost` for explicit control experiments.
 
-`experiments/analyze_adaptation.py` reads `aggregate_summary.csv` plus the authoritative per-seed summaries and query-result sidecars. It reports the recovery ratio, full-retrain-minus-adapted paired accuracy differences, the configurable `z_value * SE` decision threshold, paired Cohen's d and magnitude bin, an exact two-sided paired-t minimum detectable effect at configurable alpha/power, and diagnostic within-seed query-bootstrap interval widths. It can compare a prefix such as 10 seeds with a 30-seed analysis and validate a separate adversarial control directory. The seed is the inferential unit; query bootstrap output does not affect the decision.
+`experiments/analyze_adaptation.py` compares `dpo_policy` (constant `ADAPTED_POLICY`) with `full_retrain_policy`; it reads `aggregate_summary.csv` plus the authoritative per-seed summaries and query-result sidecars. It reports the recovery ratio, full-retrain-minus-adapted paired accuracy differences, the configurable `z_value * SE` decision threshold, paired Cohen's d and magnitude bin, an exact two-sided paired-t minimum detectable effect at configurable alpha/power, and diagnostic within-seed query-bootstrap interval widths. It can compare a prefix such as 10 seeds with a 30-seed analysis and validate a separate adversarial control directory. The seed is the inferential unit; query bootstrap output does not affect the decision.
 
 Outputs:
 
@@ -175,9 +216,12 @@ Outputs:
 seed: 7
 corpus_dir: data/documentation
 facts_path: data/documentation/facts.yaml
+test_fraction: 0.4   # share of facts held out per drift type (fact-level split)
+split_seed: 0        # fixed across training seeds, so all seeds share one test set
 knowledge_bases: [kb_a, kb_b]
 top_k: 1            # chunks revealed per SEARCH_MORE (paged search)
 max_searches: 3     # retrieval budget per question
+observe_query_embedding: false  # true = ablation: prepend the query embedding to FEATURES
 use_semantic_embeddings: true
 embedding_model: all-MiniLM-L6-v2
 # Set this to true only when an explicit deterministic offline fallback is desired.
@@ -190,11 +234,16 @@ retrieval_cost: 0.10   # per SEARCH_MORE
 correct_reward: 1.0
 incorrect_reward: -1.0
 give_up_reward: 0.0  # GIVE_UP on an answerable question (correct_reward if unanswerable)
+# DPO adaptation of the frozen KB-A policy from KB-B train trajectory pairs
+dpo_epochs: 20
+dpo_batch_size: 32
+dpo_beta: 0.1
+dpo_learning_rate: 0.001
 approval_margin: 0.0
 rolling_window: 30
 ```
 
-`run_all.py` consumes `seed`, `corpus_dir`, `facts_path`, `top_k`, `max_searches`, `train_epochs`, `batch_size`, `learning_rate`, `entropy_coef`, `retrieval_cost`, `correct_reward`, `incorrect_reward`, `give_up_reward`, and `approval_margin`. `knowledge_bases`, embedding settings and `rolling_window` are present but not wired in. `run_seeds.py` overrides `seed` per run.
+`run_all.py` consumes (and `validate_config` requires) `seed`, `corpus_dir`, `facts_path`, `test_fraction`, `split_seed`, `top_k`, `max_searches`, `observe_query_embedding`, `dpo_epochs`, `dpo_batch_size`, `dpo_beta`, `dpo_learning_rate`, `train_epochs`, `batch_size`, `learning_rate`, `entropy_coef`, `retrieval_cost`, `correct_reward`, `incorrect_reward`, `give_up_reward`, and `approval_margin`. `knowledge_bases`, embedding settings and `rolling_window` are present but not wired in. `run_seeds.py` overrides `seed` per run; `split_seed` stays fixed. Aggregates are grouped by (policy, knowledge base, split), and `analyze_adaptation.py` reads the `test` rows.
 
 `top_k: 1` is deliberate: with 3 chunks per search, the first search already surfaced both the stale FAQ and the newer reference page for every contradiction, so SEARCH_MORE was never needed. With 1 chunk per search, 5 of 6 contradictions need a second search, and the best fixed search depth differs between KB-A (1 search) and KB-B (2 searches).
 
@@ -210,13 +259,13 @@ python experiments/run_seeds.py --n-seeds 30 --jobs 4 --resume
 python experiments/analyze_adaptation.py --n-seeds 30 --compare-n-seeds 10
 ```
 
-The current suite contains 34 tests covering: corpus formatting and front matter; value-based drift typing and memory status; drift-type coverage; no KB-B leakage into KB-A; non-trivial KB-A memory; no answer values in questions; one question per episode; SEARCH_MORE revealing unseen chunks; budget masking; closed-book, GIVE_UP and unanswerable rewards; newest-source reader resolution (including that it can be wrong); contradictions resolvable by searching more; observations independent of gold/drift labels; retrieval that can fail; baseline behavior; the agent never taking a masked action; frozen evaluation; training and adaptation weight updates; approval/recovery decisions; and the adaptation analysis.
+The current suite contains 49 tests covering: DPO stopping strategies, trajectory recording and replay, frozen-policy greedy actions, best-vs-frozen pairs (one per question, only when strictly better and the answer outcome differs, train questions only), cost-only pair removal, tie handling, the RL-352 equal-episode budget, the DPO loss, trajectory log-probabilities, DPO training (moves toward chosen, reference frozen), checkpoint round trip; the evidence-only default observation and the embedding ablation; config validation; an end-to-end old-policy -> checkpoint -> DPO -> saved-policy run using only train facts; the fact-level split (disjoint, stratified, paraphrases together, seeded, KB-A test within KB-B test); an end-to-end run proving no test fact is trained on; corpus formatting and front matter; value-based drift typing and memory status; drift-type coverage; no KB-B leakage into KB-A; non-trivial KB-A memory; no answer values in questions; one question per episode; SEARCH_MORE revealing unseen chunks; budget masking; closed-book, GIVE_UP and unanswerable rewards; newest-source reader resolution (including that it can be wrong); contradictions resolvable by searching more; observations independent of gold/drift labels; retrieval that can fail; baseline behavior; the agent never taking a masked action; frozen evaluation; training and adaptation weight updates; approval/recovery decisions; and the adaptation analysis.
 
 ## Current limitations and next work
 
-- The corpus is small (36 facts) and partly synthetic; the slot reader measures retrieval/policy behavior, not language quality. The policy is trained and evaluated on the same questions (no held-out split yet).
-- `adapted_policy` is continued REINFORCE with the same budget as full retraining, not yet a small preference-based adaptation; its cost advantage cannot show up yet.
-- The observation includes the query embedding, so the policy can still memorize per question.
+- The corpus is small (36 facts) and partly synthetic; the slot reader measures retrieval/policy behavior, not language quality. Held-out evaluation uses 14 facts (24 KB-A / 28 KB-B questions), so per-seed numbers are noisy.
+- DPO-352 (outcome-changing best-vs-frozen pairs) does not move the policy away from the frozen behavior in the 3-seed smoke run: 11 pairs and 20 updates; contradictions are partly unobservable after one search (see results). No tuning has been done.
+- The default observation is evidence-only; the policy cannot tell apart questions with identical evidence state, which is intended (it must generalize) but makes per-state preference balance matter for DPO.
 - The active runner relies on `Retriever` defaults because the YAML embedding settings are not passed through `make_env()`; explicit embedding-model/fallback configuration remains future wiring work.
 - Run the benchmark with `.venv\Scripts\python.exe` so it does not depend on an unrelated system Python installation.
 - Retrieval diagnostics exist in `src/evaluation/metrics.py`, but the runner does not currently write per-query retrieval diagnostics.
@@ -234,6 +283,7 @@ Reader assumptions: mock.py
 Observation, actions, budget, reward flow: rl_rag_env.py
 Policy network and REINFORCE training: rl_agent.py
 Accuracy and metric calculations: metrics.py
+DPO adaptation and pair construction: dpo.py
 Main experiment wiring and approval/recovery decisions: run_all.py
 Multi-seed execution and aggregation: run_seeds.py
 Active experiment settings: default.yaml

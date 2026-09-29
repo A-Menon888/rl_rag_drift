@@ -7,6 +7,7 @@ cannot count as drift.
 """
 from dataclasses import dataclass
 from pathlib import Path
+import random
 import re
 
 import yaml
@@ -109,6 +110,32 @@ def build_fact_queries(facts, kb_0_chunks, kb_a_chunks, kb_b_chunks) -> tuple[li
             queries_b.append(Query(**common, gold_answer=b.value, drift_type=change,
                                    memory_status=memory_status(memory, b.value)))
     return queries_a, queries_b
+
+
+def split_facts(queries_b, test_fraction: float, seed: int) -> tuple[set[str], set[str]]:
+    """Seeded fact-level train/test split, stratified by KB-B drift type.
+
+    The unit is the fact, not the question: paraphrases of one fact share an
+    answer, so they always land in the same split. Each drift type with two or
+    more facts contributes at least one fact to both splits; a lone fact goes
+    to test so every drift type is evaluated. Stratifying on drift type is an
+    experimenter's design choice; the policy never observes it.
+    """
+    facts_by_type: dict[str, set[str]] = {}
+    for query in queries_b:
+        facts_by_type.setdefault(query.drift_type, set()).add(query.fact_id)
+    rng = random.Random(seed)
+    test = set()
+    for change in sorted(facts_by_type):
+        fact_ids = sorted(facts_by_type[change])
+        rng.shuffle(fact_ids)
+        n_test = 1 if len(fact_ids) == 1 else min(len(fact_ids) - 1, max(1, round(len(fact_ids) * test_fraction)))
+        test.update(fact_ids[:n_test])
+    return {query.fact_id for query in queries_b} - test, test
+
+
+def select_facts(queries, fact_ids) -> list[Query]:
+    return [query for query in queries if query.fact_id in fact_ids]
 
 
 def describe_queries(queries) -> dict[str, dict[str, int]]:
