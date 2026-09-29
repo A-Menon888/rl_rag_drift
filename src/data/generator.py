@@ -13,6 +13,9 @@ class Query:
     drift_type: str            # KB-A -> KB-B change of this fact; "baseline" for KB-A queries
                                # ("absent" = never documented: unanswerable, not drift)
     memory_status: str         # unknown (no memory) | correct | stale, relative to gold_answer
+    drift_event: str = ""      # KB-A -> KB-B change this fact belongs to (facts.yaml); shared by
+                               # correlated facts, otherwise the fact id
+    split_unit: str = ""       # facts kept on one side of train/test (drift events + near-duplicates)
 
     @property
     def affected_by_drift(self) -> bool:

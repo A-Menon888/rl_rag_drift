@@ -1,0 +1,140 @@
+# Construction spec for kb_0, the frozen generator's closed-book memory.
+#
+# kb_0 is never retrieved. Its pages are generated from the KB-A pages by
+# `python -m src.data.memory` and checked in; memory answers are then read
+# from kb_0 with each fact's regex, exactly like gold answers from KB-A/KB-B.
+#
+# Assignment rule (src/data/memory.py, `assign_memory`):
+#   - The unit is the drift event (facts.yaml), so correlated facts get one
+#     coherent memory: e.g. all v2-migration endpoints are remembered at v1
+#     (correct), at an older v0 (stale), or not at all (unknown).
+#   - Facts not documented in KB-A (added, absent) are unknown: a snapshot
+#     older than KB-A cannot document them.
+#   - Every other unit gets correct / stale / unknown by systematic allocation:
+#     units are grouped by KB-B drift type (stratum), shuffled with `seed`
+#     inside each stratum, and dealt the three statuses in turn, so every
+#     drift type receives the three statuses in near-equal shares and the
+#     overall split is 1/3 each (+-1 unit). The drift type is used only for
+#     balance; no KB-B value can enter memory (older values must differ from
+#     both the KB-A and the KB-B value; tested).
+#   Status is relative to KB-A: correct = KB-A value, stale = the older value
+#   below, unknown = the statement is removed from the kb_0 page.
+seed: 0
+updated: 2024-01-15
+
+# Older value per KB-A-documented fact, used only if the fact is assigned
+# `stale`. A plain string replaces the regex capture group on the KB-A page;
+# `{statement: ...}` replaces the whole regex match (for grammar). Values are
+# plausible earlier states, distinct from the KB-A and KB-B values.
+older_values:
+  # payments.md
+  payments.create_endpoint: /v0/payments
+  payments.amount_unit: decimals
+  payments.default_currency: GBP
+  payments.max_amount: 500000 cents
+  payments.manual_review_threshold: 100000 cents
+  payments.idempotency_requirement: ignore
+  payments.idempotency_ttl: 12 hours
+  payments.failure_status: "422"
+  payments.create_status: "200"
+  payments.refund_endpoint: /v0/payments/{id}/refund
+  payments.webhook_retries: 3 times
+  # users.md
+  users.create_endpoint: /v0/users
+  users.update_method: POST
+  users.id_type: {statement: The user identifier is a string}
+  users.email_case: {statement: Email addresses are stored in original case}
+  users.password_min_length: "6"
+  users.default_status: inactive
+  users.missing_status: "410"
+  users.deletion_kind: unsupported
+  users.default_page_size: "10"
+  users.max_page_size: "50"
+  users.listing_rate_limit: 30 requests per minute
+  # authentication.md
+  auth.username_max_length: "30"
+  auth.first_name_max_length: "30"
+  auth.last_name_max_length: "30"
+  auth.permission_name_max_length: "50"
+  auth.codename_max_length: "50"
+  auth.group_name_max_length: "80"
+  auth.create_unknown_user_default: "False"
+  # configuration.md
+  config.default_environment: development
+  config.env_variable: ENV
+  config.valid_environments: "`development` and `production`."
+  config.server_port: "3000"
+  config.request_timeout: "15"
+  config.max_body_size: 5 MB
+  config.db_pool_size: "10"
+  config.db_timeout: "3"
+  config.log_level: DEBUG
+  config.log_format: logfmt
+  config.dashboard_default: unreleased
+  config.dashboard_flag: NEW_DASHBOARD_BETA
+  # security.md
+  security.min_tls_version: "1.1"
+  security.hsts_max_age: "86400"
+  security.encryption_at_rest: AES-128
+  security.password_hash: sha1
+  security.token_lifetime: "120"
+  security.key_rotation: "365"
+  security.admin_mfa: unsupported
+  security.legacy_token_header: X-Auth-Token
+  security.csp_mode: disabled
+  security.audit_retention: "30"
+  security.report_contact: support@acme.dev
+  # deployment.md
+  deployment.base_image: ubuntu
+  deployment.orchestrator: Nomad
+  deployment.primary_region: us-west-2
+  deployment.default_replicas: "2"
+  deployment.release_strategy: recreate
+  deployment.freeze_day: Thursdays
+  deployment.cpu_limit: "1"
+  deployment.memory_limit: 2 GB
+  deployment.health_endpoint: /health
+  deployment.readiness_interval: "30"
+  deployment.secrets_source: config-maps
+  deployment.backup_interval: "48"
+  # sessions.md
+  sessions.store: files
+  sessions.data_limit: 1 KB
+  sessions.purge_interval: "120"
+  sessions.max_lifetime: "48"
+  sessions.concurrent_limit: "10"
+  sessions.remember_me_duration: "14"
+  sessions.id_length: "16"
+  sessions.id_rotation: never
+  sessions.cookie_name: sid
+  sessions.cookie_samesite: None
+  sessions.cookie_httponly: Secure
+  sessions.cookie_signing: HMAC-SHA1
+  # middleware.md
+  middleware.first_in_stack: session
+  middleware.request_id_header: X-Correlation-ID
+  middleware.request_id_format: uuid1
+  middleware.cors_preflight_cache: "60"
+  middleware.cors_credentials: ignored
+  middleware.compression_algorithm: deflate
+  middleware.csrf_header: X-XSRF-Token
+  middleware.csrf_exempt_path: /api
+  middleware.client_ip_header: X-Real-IP
+  middleware.multipart_bodies: ignored
+  middleware.error_body_format: html
+  middleware.error_status: "502"
+  # api.md
+  api_base_url: https://api.acme.dev/v0
+  api_version: /v0
+  user_create_endpoint: POST /v0/users
+  user_get_endpoint: GET /v0/users/{id}
+  user_delete_endpoint: DELETE /v0/users/{id}
+  user_list_limit: "50"
+  payment_create_endpoint: POST /v0/payments
+  payment_get_endpoint: GET /v0/payments/{id}
+  payment_idempotency: X-Idempotency-Key
+  payment_currencies: "`USD` and `EUR`."
+  api_rate_limit: 1000 requests per minute
+  rate_limit_status: "503"
+  create_status: "200"
+  retrieve_status: "204"

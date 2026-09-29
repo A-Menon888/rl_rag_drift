@@ -37,7 +37,7 @@ Retrieve a payment with:
 
 `GET /v1/payments/{id}`
 
-The payment creation endpoint requires an `Idempotency-Key` header.
+The payment creation endpoint supports an `Idempotency-Key` header.
 
 Supported payment currencies are `USD`, `EUR`, and `GBP`.
 

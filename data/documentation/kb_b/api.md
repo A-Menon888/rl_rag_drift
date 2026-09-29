@@ -49,7 +49,7 @@ Requests that exceed the rate limit receive HTTP status `429`.
 
 ## API Responses
 
-Successful resource creation returns HTTP status `202`.
+Successful resource creation returns HTTP status `201`.
 
 Successful resource retrieval returns HTTP status `200`.
 

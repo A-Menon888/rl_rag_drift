@@ -55,6 +55,11 @@ def summarize(infos):
         return float(np.mean(values)) if values else None
     drifted = [item for item in infos if item["affected_by_drift"]]
     stable = [item for item in infos if not item["affected_by_drift"]]
+    # Correlated facts share a drift event; weight each event once so that one
+    # change affecting many facts is not counted as many independent changes.
+    by_event = {}
+    for item in drifted:
+        by_event.setdefault(item.get("drift_event") or item["query_id"], []).append(item["correct"])
     return {
         "accuracy": mean(item["correct"] for item in infos),
         "average_reward": mean(item["episode_return"] for item in infos),
@@ -68,5 +73,7 @@ def summarize(infos):
         "wrong_answer_rate": mean(item["final_action"] == "answer" and not item["correct"] for item in infos),
         "unanswerable_accuracy": mean(item["correct"] for item in infos if not item["answerable"]),
         "drifted_accuracy": mean(item["correct"] for item in drifted),
+        "drifted_event_accuracy": mean(mean(values) for values in by_event.values()),
+        "drifted_events": len(by_event),
         "stable_accuracy": mean(item["correct"] for item in stable),
     }

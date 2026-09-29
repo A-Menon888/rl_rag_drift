@@ -12,14 +12,18 @@ The corpus is local Markdown. No LLM or external API is used by the active code 
 
 ```text
 configs/default.yaml           Experiment configuration
-data/documentation/kb_0/*.md   Generator memory snapshot (closed-book knowledge; never retrieved)
+data/documentation/kb_0/*.md   Generator memory snapshot (closed-book knowledge; never retrieved; generated)
 data/documentation/kb_a/*.md   Original deployed documentation snapshot
 data/documentation/kb_b/*.md   Drifted documentation snapshot
-data/documentation/facts.yaml  Fact manifest: answer-slot regex + hand-written questions
+data/documentation/facts.yaml  Fact manifest: answer-slot regex + hand-written questions + drift events
+data/documentation/memory.yaml kb_0 construction spec: seed, date, older value per KB-A fact
+data/documentation/fact_trajectories.csv  Generated audit table: kb_0 -> KB-A -> KB-B per fact
 experiments/run_all.py         Training, evaluation, plots, CSV, checkpoints
 experiments/analyze_adaptation.py Paired seed analysis, power, bootstrap, control validation
 src/data/documents.py          Markdown loader and chunker
 src/data/facts.py              Fact extraction, drift typing, memory status, query builder
+src/data/memory.py             kb_0 memory assignment rule and page builder (python -m src.data.memory [--check])
+src/data/audit.py              Fact-trajectory validation and CSV (python -m src.data.audit)
 src/data/generator.py          Shared Query record
 src/retrieval/embeddings.py    Hashed-token or optional sentence-transformer embeddings
 src/retrieval/retriever.py     Top-k inner-product retrieval
@@ -33,6 +37,7 @@ src/evaluation/plots.py        Matplotlib training-curve helper
 tests/test_documents.py        Document and retrieval tests
 tests/test_env.py              Environment, evaluation, training, config and end-to-end tests
 tests/test_dpo.py              Trajectory pairs, DPO objective/training, checkpoint round trip
+tests/test_dataset.py          Chunking, drift events, kb_0 memory rule, fact-trajectory invariants
 ```
 
 ## Where to work first
@@ -60,12 +65,18 @@ The generated files under `results/` are outputs, not source of truth. Recreate 
 
 Three snapshots of the same pages form a timeline: memory (`kb_0`) -> deployed (`kb_a`) -> drifted (`kb_b`).
 
+- `api.md`, `configuration.md`, `deployment.md`, `middleware.md`, `security.md`, `sessions.md`: synthetic references added in the 120-fact expansion, one statement per line under `##` sections.
 - `authentication.md`: Django auth API reference (real text; formatting artifacts such as pilcrows and curly apostrophes were removed so only intended edits differ).
 - `users.md`, `payments.md`: synthetic API reference, one topic per paragraph.
 - `faq.md` (KB-A and KB-B only): restates a few facts. It is deliberately not updated in KB-B (its `updated:` date stays 2025-03-20), which creates contradictions.
 
 Every page starts with front matter (`---` / `updated: YYYY-MM-DD` / `---`), parsed by the loader into `DocumentChunk.updated`. KB-0 pages are dated 2024-01-15, KB-A reference pages 2025-02/03, KB-B reference pages 2026-05/06.
-- `kb_0` contains only the reference pages, with some facts absent (unknown to memory) or at older values (stale memory).
+
+**Chunking** (`src/data/documents.py`): blank-line paragraphs, heading lines dropped, split at 80 words. A paragraph ending in `:` is a lead-in ("Create a user with:") and is joined with the following block ("`POST /v1/users`"), never across a heading. Before this fix (2026-09-30) the value-bearing code line of `api.md` (and the Django field lists) was a separate chunk from its sentence: `api.md` gold-chunk top-3 recall was 0.67 (KB-A) / 0.63 (KB-B), now 0.83 / 0.85. Adding heading context to chunks was measured and gave no net change (overall top-3 0.91 -> 0.91 on KB-A), so headings are still dropped. Every chunk records its snapshot in `DocumentChunk.knowledge_base`; `RLRAGEnv` raises if given any `kb_0` chunk.
+
+Chunks (KB-A / KB-B): 243 / 252; authentication.md 143 / 145 (mean 19 words), payments/users/faq 6-11 each (17-20 words), the six expanded pages 11-16 each (7-8 words). Every documented fact is stated in exactly one chunk of its owning page (tested); `authentication.md` chunks are distractors, not redundant answers. Gold-chunk top-3 recall with all-MiniLM-L6-v2 is 0.91 (KB-A) / 0.92 (KB-B), 0.82-1.00 per page; short one-sentence chunks are easier to retrieve, not harder, and top-3 recall is similar across drift types (modified 0.91, unchanged 0.92, added 0.93; contradicted 1.00 top-3 but 0.17 top-1 because the FAQ ranks first).
+
+**kb_0 (generator memory)** is generated from the KB-A pages by `python -m src.data.memory` following `data/documentation/memory.yaml`, and checked in (a test fails if it drifts from the rule). Rule (`assign_memory`): the unit is the drift event (correlated facts share one memory status); facts not documented in KB-A (added, absent) are unknown; every other unit gets correct / stale / unknown by seeded systematic allocation, stratified by KB-B drift type (1/3 each, +-1 unit per stratum; seed 0). Correct keeps the KB-A statement, stale substitutes the hand-written older value from `memory.yaml`, unknown removes the sentence. Older values are distinct from the KB-A and KB-B values and appear in no question (checked when building), so no KB-B value can enter memory. Status is relative to KB-A. The pre-2026-09-30 kb_0 was hand-edited and covered only authentication/payments/users.
 
 KB-B edits are exact, reviewable replacements: `/v2` endpoints, PUT -> PATCH, EUR, required idempotency keys valid for 48 hours, larger page sizes, a pending default status, reversible deletion, longer Django field limits, additions (refund window, restore window, session idle timeout, dev port) and removals (manual-review threshold, listing rate limit).
 
@@ -73,6 +84,7 @@ KB-B edits are exact, reviewable replacements: `/v2` endpoints, PUT -> PATCH, EU
 
 `facts.yaml` lists facts as `id`, owning `source` page, a `pattern` with exactly one capture group, and hand-written `questions`. No values are written in the manifest. `src/data/facts.py`:
 
+- Optional `drift_event`: facts sharing one KB-A -> KB-B cause, declared with a description under top-level `drift_events` (`Fact.event` defaults to the fact id). Three events: `api_v2_migration` (10 facts on api/users/payments: every KB-B value is the KB-A value with the version path segment replaced by `/v2`; tested to be exactly that set), `user_list_max_size` (users.max_page_size and user_list_limit, one quantity on two pages), `webhook_api_added` (two endpoints in one new section). `Query.drift_event`, env terminal `info["drift_event"]`, the KB-B sidecar and `describe_queries` (facts and drift events per drift type) carry it; `summarize()` adds `drifted_event_accuracy` (each drift event weighted once) and `drifted_events`.
 - `fact_value(fact, chunks)` reads the value from the owning page (at most one match, otherwise error) plus any different values stated on other pages (`conflicting`). Values are normalized (lowercase, collapsed whitespace), so formatting-only edits are not drift.
 - `drift_type(A, B)`: `removed` (absent in B), `added` (absent in A), `contradicted` (another B page disagrees), `modified`, `unchanged`, or `absent` (never documented; unanswerable, not drift).
 - `memory_status(memory, gold)`: `unknown` (memory has no answer), `correct`, or `stale` (a wrong value, including any value for an unanswerable question).
@@ -80,11 +92,11 @@ KB-B edits are exact, reviewable replacements: `/v2` endpoints, PUT -> PATCH, EU
 
 ### Train/test split
 
-`split_facts(queries_b, test_fraction, seed)` splits **facts**, not questions, so paraphrases of one fact (same answer) never straddle the split. It is stratified by KB-B drift type: every type with two or more facts contributes at least one fact to each split. `select_facts(queries, fact_ids)` filters a query list. Both splits query the same full KB (documents are never split away from retrieval); only the questions differ. With `test_fraction: 0.4, split_seed: 0`: 22 train / 14 test facts; KB-A train 40 / test 24 questions; KB-B train 44 / test 28 questions; every drift type appears in both KB-B splits. The KB-A test questions are a subset of the KB-B test questions (same held-out facts; KB-B adds the held-out `added` facts). `split_seed` is fixed across training seeds, so all seeds share one test set.
+`split_facts(queries_b, test_fraction, seed)` splits **facts**, not questions, so paraphrases of one fact (same answer) never straddle the split. It is stratified by KB-B drift type: every type with two or more facts contributes at least one fact to each split. `select_facts(queries, fact_ids)` filters a query list. Both splits query the same full KB (documents are never split away from retrieval); only the questions differ. **Split unit (2026-09-30):** the split assigns *split units*, not single facts: connected components of drift events and the near-duplicate `split_groups` declared in `facts.yaml` (`creation_status`, `payment_idempotency`, `rate_limits`: different facts whose questions ask for the same property). `Fact.unit` / `Query.split_unit` carry it; strata are the set of drift types in a unit. 106 units, 6 with several facts. With `test_fraction: 0.4, split_seed: 0`: train 71 facts / 62 units (KB-A 135, KB-B 151 questions), test 49 facts / 44 units (KB-A 89, KB-B 103 questions). KB-B test facts: unchanged 13, modified 23, contradicted 2, added 7, removed 3, absent 1; train: unchanged 17, modified 40, contradicted 1, added 8, removed 3, absent 2. The whole API migration (10 facts) is in train; every other multi-fact unit is in test. Only 1 contradicted fact (2 questions) is in train. The KB-A test questions are a subset of the KB-B test questions (same held-out facts; KB-B adds the held-out `added` facts). `split_seed` is fixed across training seeds, so all seeds share one test set.
 
 `Query` fields: `query_id`, `fact_id`, `source`, `text`, `answer_pattern`, `memory_answer`, `gold_answer`, `drift_type` (`baseline` on KB-A), `memory_status`, and the derived `affected_by_drift`.
 
-Current counts: 36 facts (3 never documented). KB-A has 64 queries (58 answerable; memory correct 40 / stale 12 / unknown 12). KB-B has 72 queries (62 answerable; unchanged 22, modified 26, contradicted 6, added 8, removed 4, absent 6; memory correct 18 / stale 34 / unknown 20).
+Current counts (2026-09-30): 120 facts, 254 questions. Facts by drift type (drift events in brackets): unchanged 30 (30), modified 63 (54), added 15 (14), removed 6 (6), contradicted 3 (3), absent 3 (3). Memory vs KB-A by unit: correct 31, stale 31, unknown 30; by fact: correct 31, stale 31, unknown 58 (the 10-fact API migration unit drew unknown; 18 facts are unknown because KB-A lacks them). KB-A has 224 queries, KB-B 254 (236 answerable; unchanged 64, modified 136, contradicted 6, added 30, removed 12, absent 6). `data/documentation/fact_trajectories.csv` lists every fact; `python -m src.data.audit` validates all trajectories (0 problems).
 
 ## Control flow (one episode = one question)
 
@@ -168,9 +180,26 @@ recovery: candidate kb_b/test accuracy >= old_policy/kb_a/test accuracy
 
 No training ever happens on test questions of either KB.
 
-The runner validates the config (`validate_config`: required keys and types), then writes 17 CSV rows keyed by `policy`, `knowledge_base` and `split` (old policy on kb_a train/test and kb_b test; `dpo_policy`, `rl_finetune_policy` and full retrain on kb_b train/test; four baselines on kb_a/kb_b test) with `accuracy`, `average_reward` (mean episode return), `average_searches`, `retrieval_rate` (episodes with at least one search), `retrieval_cost`, `unnecessary_retrieval_rate` (searched although closed-book memory was correct), `give_up_rate`, `wrong_answer_rate`, `unanswerable_accuracy`, `drifted_accuracy`, `stable_accuracy`, `training_final_return`, the budget fields `adaptation_episodes`, `gradient_updates`, `policy_step_evaluations` (for rows of the policy's training KB), and the approval/recovery fields. `metadata.json` records the observation definition (flag, feature names, dimension) and the DPO/full-retrain/old-policy budgets. The sidecar `kb_b_query_results.csv` covers KB-B **test** questions only, with per-question `drift_type`, `memory_status`, and each trained policy's `_correct`, `_action` (final action) and `_searches`.
+The runner validates the config (`validate_config`: required keys and types), then writes 17 CSV rows keyed by `policy`, `knowledge_base` and `split` (old policy on kb_a train/test and kb_b test; `dpo_policy`, `rl_finetune_policy` and full retrain on kb_b train/test; four baselines on kb_a/kb_b test) with `accuracy`, `average_reward` (mean episode return), `average_searches`, `retrieval_rate` (episodes with at least one search), `retrieval_cost`, `unnecessary_retrieval_rate` (searched although closed-book memory was correct), `give_up_rate`, `wrong_answer_rate`, `unanswerable_accuracy`, `drifted_accuracy`, `stable_accuracy`, `training_final_return`, the budget fields `adaptation_episodes`, `gradient_updates`, `policy_step_evaluations` (for rows of the policy's training KB), and the approval/recovery fields. `metadata.json` records the observation definition (flag, feature names, dimension) and the DPO/full-retrain/old-policy budgets. The sidecar `kb_b_query_results.csv` covers KB-B **test** questions only, with per-question `fact_id`, `drift_event`, `drift_type`, `memory_status`, and each trained policy's `_correct`, `_action` (final action) and `_searches`.
 
-Held-out results, 3 seeds (0-2), default config with outcome-changing pairs only, 2026-09-30, KB-B test facts:
+**Smoke run on the reviewed 120-fact dataset** (3 seeds, default config, split units, 2026-09-30; outputs in a scratch directory, not `results/`). KB-A test 89 questions, KB-B test 103:
+
+| row | acc | return | searches | give-up |
+|---|---|---|---|---|
+| old_policy kb_a test | 0.955 | 0.804 | 1.28 | 0.045 |
+| old_policy kb_b test (frozen) | 0.893 | 0.667 | 1.39 | 0.058 |
+| dpo_policy (DPO-1208) | 0.893 | 0.667 | 1.39 | 0.058 |
+| rl_finetune_policy (RL-1208) | 0.906 (0.89-0.93) | 0.699 (0.67-0.76) | 1.39 | 0.078 |
+| full_retrain_policy | 0.932 | 0.764 | 1.39 | 0.117 |
+| search_once / search_all kb_b | 0.757 / 0.883 | 0.415 / 0.467 | 1 / 3 | 0 |
+
+- Adaptation budget is now 1208 episodes (8 epochs x 151 KB-B train questions). DPO: 7 pairs per seed (identical across seeds), 20 updates, loss 0.693 -> ~0.59. RL-1208: 80 updates. Full retrain: 45,300 episodes, 3000 updates.
+- DPO leaves every greedy action unchanged on every KB-B test question in all 3 seeds (identical to frozen).
+- All four trained policies use the same search depth on every test question (search until evidence states the slot, up to 3). They differ only in the final action after 3 fruitless searches: the frozen policy answers from memory, full retrain gives up. Full retrain's whole gain is the 2 removed facts with stale memory (4 questions), plus two answerable stale-memory questions where it gives up instead of answering wrongly (return, not accuracy). RL-1208 learns this give-up in seed 1 only.
+- No policy resolves contradictions: every policy answers after 1 search on all 4 contradicted test questions (accuracy 0.25; `users.max_page_size.q0` is right only because users.md ranks above the FAQ). Train holds 1 contradicted fact (`default_currency`, memory = the stale FAQ value); its 2 DPO pairs (search 1 -> search 2+) do not change behavior, and full retrain does not learn to search again either.
+- Approval (cost <= search_once cost) is DECLINED for every arm because all search ~1.39 times; recovery (>= old_policy kb_a 0.955) is not reached by any arm. Both are heuristics.
+
+Held-out results, 3 seeds (0-2), default config with outcome-changing pairs only, 2026-09-30, KB-B test facts. **36-fact corpus and old kb_0; superseded dataset, not rerun on the 120-fact dataset:**
 
 | row | acc | return | searches |
 |---|---|---|---|
@@ -259,11 +288,13 @@ python experiments/run_seeds.py --n-seeds 30 --jobs 4 --resume
 python experiments/analyze_adaptation.py --n-seeds 30 --compare-n-seeds 10
 ```
 
-The current suite contains 49 tests covering: DPO stopping strategies, trajectory recording and replay, frozen-policy greedy actions, best-vs-frozen pairs (one per question, only when strictly better and the answer outcome differs, train questions only), cost-only pair removal, tie handling, the RL-352 equal-episode budget, the DPO loss, trajectory log-probabilities, DPO training (moves toward chosen, reference frozen), checkpoint round trip; the evidence-only default observation and the embedding ablation; config validation; an end-to-end old-policy -> checkpoint -> DPO -> saved-policy run using only train facts; the fact-level split (disjoint, stratified, paraphrases together, seeded, KB-A test within KB-B test); an end-to-end run proving no test fact is trained on; corpus formatting and front matter; value-based drift typing and memory status; drift-type coverage; no KB-B leakage into KB-A; non-trivial KB-A memory; no answer values in questions; one question per episode; SEARCH_MORE revealing unseen chunks; budget masking; closed-book, GIVE_UP and unanswerable rewards; newest-source reader resolution (including that it can be wrong); contradictions resolvable by searching more; observations independent of gold/drift labels; retrieval that can fail; baseline behavior; the agent never taking a masked action; frozen evaluation; training and adaptation weight updates; approval/recovery decisions; and the adaptation analysis.
+The current suite contains 69 tests covering: split units never straddling train/test; api.md agreeing with payments.md on creation status and idempotency; lead-in chunking and one answer chunk per fact; drift-event declarations (the API migration is exactly the version-path substitutions); the kb_0 memory rule (explicit auditable status for every fact, reproducible and matching the checked-in kb_0, balanced per drift type, shared within drift events, no KB-B-only value in memory, every older value valid, kb_0 rejected as a retrieval corpus, generator uses memory only closed-book); fact-trajectory validation and the checked-in trajectory CSV; DPO stopping strategies, trajectory recording and replay, frozen-policy greedy actions, best-vs-frozen pairs (one per question, only when strictly better and the answer outcome differs, train questions only), cost-only pair removal, tie handling, the RL-352 equal-episode budget, the DPO loss, trajectory log-probabilities, DPO training (moves toward chosen, reference frozen), checkpoint round trip; the evidence-only default observation and the embedding ablation; config validation; an end-to-end old-policy -> checkpoint -> DPO -> saved-policy run using only train facts; the fact-level split (disjoint, stratified, paraphrases together, seeded, KB-A test within KB-B test); an end-to-end run proving no test fact is trained on; corpus formatting and front matter; value-based drift typing and memory status; drift-type coverage; no KB-B leakage into KB-A; non-trivial KB-A memory; no answer values in questions; one question per episode; SEARCH_MORE revealing unseen chunks; budget masking; closed-book, GIVE_UP and unanswerable rewards; newest-source reader resolution (including that it can be wrong); contradictions resolvable by searching more; observations independent of gold/drift labels; retrieval that can fail; baseline behavior; the agent never taking a masked action; frozen evaluation; training and adaptation weight updates; approval/recovery decisions; and the adaptation analysis.
 
 ## Current limitations and next work
 
-- The corpus is small (36 facts) and partly synthetic; the slot reader measures retrieval/policy behavior, not language quality. Held-out evaluation uses 14 facts (24 KB-A / 28 KB-B questions), so per-seed numbers are noisy.
+- The corpus (120 facts) is partly synthetic; the slot reader measures retrieval/policy behavior, not language quality. The results above are from the 36-fact corpus and the previous kb_0; nothing has been rerun on the 120-fact dataset.
+- Drift cases that require a different retrieval policy after drift are scarce: 3 contradicted facts (1 in test) and 6 removed (2 in test). Modified facts are mostly handled by the same evidence-first behavior. Contradiction/removal results will be anecdotal; drift types were left unchanged rather than edited toward a target distribution.
+- Fixed 2026-09-30: KB-A api.md now says the payment endpoint "supports" (was "requires") an `Idempotency-Key` header, matching payments.md; KB-B api.md resource creation returns 201 (was 202), matching payments.md/users.md (`create_status` is now unchanged). Remaining known cross-page inconsistency, inert for the slot reader: KB-A payments.md/users.md unversioned paths vs api.md `/v1`. The `payment_idempotency` questions still say "required", which is only true in KB-B.
 - DPO-352 (outcome-changing best-vs-frozen pairs) does not move the policy away from the frozen behavior in the 3-seed smoke run: 11 pairs and 20 updates; contradictions are partly unobservable after one search (see results). No tuning has been done.
 - The default observation is evidence-only; the policy cannot tell apart questions with identical evidence state, which is intended (it must generalize) but makes per-state preference balance matter for DPO.
 - The active runner relies on `Retriever` defaults because the YAML embedding settings are not passed through `make_env()`; explicit embedding-model/fallback configuration remains future wiring work.

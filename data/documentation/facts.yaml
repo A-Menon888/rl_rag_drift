@@ -14,11 +14,43 @@
 #
 # Facts whose pattern matches no snapshot are "absent": plausible questions
 # the documentation never answers. The correct behaviour is GIVE_UP.
+#
+# Drift events. A drift event is one underlying KB-A -> KB-B change. Most
+# facts are their own event (no `drift_event` key). Facts that share a
+# `drift_event` changed for a single documented reason, so they must not be
+# counted as independent drift events in analysis. An event is declared only
+# when the shared cause is verifiable from the documents (tested):
+drift_events:
+  api_v2_migration: >-
+    The API moved to version 2. Every member's KB-B value equals its KB-A value
+    with the version path segment (/v1, or none on the unversioned users/payments
+    pages) replaced by /v2; no other change is involved. Spans api.md, users.md
+    and payments.md.
+  user_list_max_size: >-
+    One quantity, the maximum number of users per list request, stated on both
+    users.md and api.md (100 -> 200). The stale FAQ also restates it, which is
+    why the users.md member is `contradicted` and the api.md member `modified`.
+  webhook_api_added: >-
+    A new "Webhook API" section added to api.md in KB-B, introducing both
+    webhook endpoints together.
+
+# Near-duplicate facts: different facts whose questions ask for the same
+# property, so a statement on one page answers the other fact's question.
+# (Sibling slots such as first- vs last-name length are not duplicates: they
+# have different answers.) The train/test split keeps every drift event and
+# every group below, and anything linked to them, on one side
+# (src/data/facts.py, `split_units`). Duplicates already sharing a drift event
+# (create-endpoint pairs, list-size pair) need no entry here.
+split_groups:
+  creation_status: [payments.create_status, create_status]
+  payment_idempotency: [payments.idempotency_requirement, payment_idempotency]
+  rate_limits: [users.listing_rate_limit, api_rate_limit]
 
 facts:
   # ── payments.md ──────────────────────────────────────────────────────────
   - id: payments.create_endpoint
     source: payments.md
+    drift_event: api_v2_migration
     pattern: 'Create a payment with POST (\S+)\.'
     questions:
       - Which endpoint do I call to create a new payment?
@@ -82,6 +114,7 @@ facts:
 
   - id: payments.refund_endpoint
     source: payments.md
+    drift_event: api_v2_migration
     pattern: 'Refund requests use POST (\S+)\.'
     questions:
       - Which endpoint issues a refund for a payment?
@@ -104,6 +137,7 @@ facts:
   # ── users.md ─────────────────────────────────────────────────────────────
   - id: users.create_endpoint
     source: users.md
+    drift_event: api_v2_migration
     pattern: 'Create a user with POST (\S+)\.'
     questions:
       - Which endpoint creates a new user account?
@@ -174,6 +208,7 @@ facts:
 
   - id: users.max_page_size
     source: users.md
+    drift_event: user_list_max_size
     pattern: 'The maximum page size is (\d+) users'
     questions:
       - What is the largest page size allowed for user listings?
@@ -755,6 +790,7 @@ facts:
 
   - id: api_base_url
     source: api.md
+    drift_event: api_v2_migration
     pattern: '`(https://api\.acme\.dev/v\d+)`'
     questions:
       - "What is the base URL for the API?"
@@ -763,6 +799,7 @@ facts:
 
   - id: api_version
     source: api.md
+    drift_event: api_v2_migration
     pattern: '`(/v\d+)` path identifies the current stable API version'
     questions:
       - "What version of the API is currently stable?"
@@ -771,6 +808,7 @@ facts:
 
   - id: user_create_endpoint
     source: api.md
+    drift_event: api_v2_migration
     pattern: '`(POST /v\d+/users)`'
     questions:
       - "What endpoint creates a user?"
@@ -779,6 +817,7 @@ facts:
 
   - id: user_get_endpoint
     source: api.md
+    drift_event: api_v2_migration
     pattern: '`(GET /v\d+/users/\{id\})`'
     questions:
       - "What endpoint retrieves a user?"
@@ -787,6 +826,7 @@ facts:
 
   - id: user_delete_endpoint
     source: api.md
+    drift_event: api_v2_migration
     pattern: '`(DELETE /v\d+/users/\{id\})`'
     questions:
       - "What endpoint deletes a user?"
@@ -795,6 +835,7 @@ facts:
 
   - id: user_list_limit
     source: api.md
+    drift_event: user_list_max_size
     pattern: 'maximum number of users returned by a single list request is (\d+)'
     questions:
       - "How many users can one list request return?"
@@ -803,6 +844,7 @@ facts:
 
   - id: payment_create_endpoint
     source: api.md
+    drift_event: api_v2_migration
     pattern: '`(POST /v\d+/payments)`'
     questions:
       - "What endpoint creates a payment?"
@@ -811,6 +853,7 @@ facts:
 
   - id: payment_get_endpoint
     source: api.md
+    drift_event: api_v2_migration
     pattern: '`(GET /v\d+/payments/\{id\})`'
     questions:
       - "What endpoint retrieves a payment?"
@@ -819,7 +862,7 @@ facts:
 
   - id: payment_idempotency
     source: api.md
-    pattern: '`(Idempotency-Key)` header'
+    pattern: 'payment creation endpoint (?:supports|requires) an `([\w-]+)` header'
     questions:
       - "What header is required when creating a payment?"
       - "Which header provides payment idempotency?"
@@ -867,6 +910,7 @@ facts:
 
   - id: webhook_create_endpoint
     source: api.md
+    drift_event: webhook_api_added
     pattern: '`(POST /v\d+/webhooks)`'
     questions:
       - What endpoint creates a webhook subscription?
@@ -874,6 +918,7 @@ facts:
 
   - id: webhook_delete_endpoint
     source: api.md
+    drift_event: webhook_api_added
     pattern: '`(DELETE /v\d+/webhooks/\{id\})`'
     questions:
       - What endpoint deletes a webhook subscription?

@@ -1,6 +1,7 @@
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
+from src.data.documents import MEMORY_SNAPSHOT
 from src.generation.mock import MockAnswerGenerator, evidence_candidates
 from src.retrieval.retriever import Retriever
 
@@ -47,6 +48,11 @@ class RLRAGEnv(gym.Env):
     def __init__(self, queries, chunks, *, top_k=3, max_searches=3, search_cost=0.10,
                  correct_reward=1.0, incorrect_reward=-1.0, give_up_reward=0.0, observe_query_embedding=False):
         self.queries = list(queries)
+        chunks = list(chunks)
+        # kb_0 is the frozen generator's closed-book memory; it reaches the
+        # reader only through Query.memory_answer and must never be retrievable.
+        if any(getattr(chunk, "knowledge_base", "") == MEMORY_SNAPSHOT for chunk in chunks):
+            raise ValueError("kb_0 is generator memory and cannot be used as a retrieval corpus")
         self.retriever = Retriever(chunks)
         self.generator = MockAnswerGenerator()
         self.top_k = top_k
@@ -140,6 +146,7 @@ class RLRAGEnv(gym.Env):
             evidence_conflict=self._conflict_seen,
             answerable=gold is not None,
             drift_type=self.query.drift_type,
+            drift_event=self.query.drift_event,
             memory_status=self.query.memory_status,
             affected_by_drift=self.query.affected_by_drift,
         )

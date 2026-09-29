@@ -10,15 +10,15 @@ class models.User
 User objects have the following fields:
 
 username
-Required. 30 characters or fewer. Usernames may contain alphanumeric, _, @, +, . and - characters.
+Required. 150 characters or fewer. Usernames may contain alphanumeric, _, @, +, . and - characters.
 
 The max_length should be sufficient for many use cases. If you need a longer length, please use a custom user model.
 
 first_name
-Optional (blank=True). 30 characters or fewer.
+Optional (blank=True).
 
 last_name
-Optional (blank=True). 150 characters or fewer.
+Optional (blank=True). 30 characters or fewer.
 
 email
 Optional (blank=True). Email address.
@@ -212,7 +212,7 @@ content_type
 Required. A foreign key to the ContentType model.
 
 codename
-Required. 100 characters or fewer. Example: 'can_vote'.
+Required. Example: 'can_vote'.
 
 Methods
 Permission objects have the standard data-access methods like any other Django model.
@@ -387,7 +387,7 @@ Use this backend to take advantage of external-to-Django-handled authentication.
 If you need more control, you can create your own authentication backend that inherits from this class and override these attributes or methods:
 
 create_unknown_user
-True or False. Determines whether or not a user object is created if not already in the database Defaults to True.
+True or False.
 
 authenticate(request, remote_user)[source]
 aauthenticate(request, remote_user)

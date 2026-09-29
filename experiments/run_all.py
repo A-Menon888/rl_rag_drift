@@ -290,6 +290,7 @@ def run_experiment(config, output_root=ROOT / "results", summary_path=None):
     query_rows = []
     for index, query in enumerate(queries[("kb_b", "test")]):
         row = {"seed": seed, "query_index": index, "query_id": query.query_id,
+               "fact_id": query.fact_id, "drift_event": query.drift_event,
                "affected_by_drift": query.affected_by_drift, "drift_type": query.drift_type,
                "memory_status": query.memory_status}
         for name in TRAINED_POLICIES:

@@ -5,7 +5,7 @@ snapshot is read from the documents with the fact's regex, so drift types are
 computed from content rather than hand-labelled, and formatting-only edits
 cannot count as drift.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import random
 import re
@@ -24,6 +24,16 @@ class Fact:
     source: str
     pattern: str
     questions: tuple[str, ...]
+    drift_event: str = ""   # shared KB-A -> KB-B change this fact belongs to; "" = its own event
+    split_unit: str = ""    # facts that must share a train/test split (set by load_facts); "" = the event
+
+    @property
+    def event(self) -> str:
+        return self.drift_event or self.fact_id
+
+    @property
+    def unit(self) -> str:
+        return self.split_unit or self.event
 
 
 @dataclass(frozen=True)
@@ -40,18 +50,64 @@ def extract_values(pattern: str, text: str) -> list[str]:
     return [normalize_answer(match) for match in re.findall(pattern, text)]
 
 
+def load_drift_events(path: str | Path) -> dict[str, str]:
+    """Declared multi-fact drift events: event id -> documented shared cause."""
+    return dict(yaml.safe_load(Path(path).read_text(encoding="utf-8")).get("drift_events") or {})
+
+
+def load_split_groups(path: str | Path) -> dict[str, list[str]]:
+    """Declared near-duplicate fact groups: group id -> fact ids."""
+    return {k: list(v) for k, v in (yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+                                    .get("split_groups") or {}).items()}
+
+
+def split_units(facts, groups: dict[str, list[str]]) -> dict[str, str]:
+    """fact id -> split unit: connected components of drift events and near-duplicate groups.
+
+    A unit is named after its alphabetically first drift event, so single
+    facts keep their own id.
+    """
+    parent = {fact.fact_id: fact.fact_id for fact in facts}
+
+    def root(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    links = [[f.fact_id for f in facts if f.event == event] for event in {f.event for f in facts}]
+    for members in links + list(groups.values()):
+        for other in members[1:]:
+            parent[root(other)] = root(members[0])
+    events = {}
+    for fact in facts:
+        events.setdefault(root(fact.fact_id), set()).add(fact.event)
+    return {fact.fact_id: min(events[root(fact.fact_id)]) for fact in facts}
+
+
 def load_facts(path: str | Path) -> list[Fact]:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))["facts"]
-    facts = [Fact(item["id"], item["source"], item["pattern"], tuple(item["questions"])) for item in raw]
+    facts = [Fact(item["id"], item["source"], item["pattern"], tuple(item["questions"]),
+                  item.get("drift_event", "")) for item in raw]
     ids = [fact.fact_id for fact in facts]
     if len(ids) != len(set(ids)):
         raise ValueError("fact ids must be unique")
+    declared = load_drift_events(path)
+    used = [fact.drift_event for fact in facts if fact.drift_event]
+    if set(used) != set(declared):
+        raise ValueError(f"drift events used {sorted(set(used))} != declared {sorted(declared)}")
+    if any(used.count(event) < 2 for event in declared) or set(declared) & set(ids):
+        raise ValueError("a declared drift event needs two or more facts and must not reuse a fact id")
     for fact in facts:
         if re.compile(fact.pattern).groups != 1:
             raise ValueError(f"{fact.fact_id}: pattern must have exactly one capture group")
         if not fact.questions:
             raise ValueError(f"{fact.fact_id}: at least one question is required")
-    return facts
+    groups = load_split_groups(path)
+    if any(len(members) < 2 or not set(members) <= set(ids) for members in groups.values()):
+        raise ValueError("a split group needs two or more existing facts")
+    units = split_units(facts, groups)
+    return [replace(fact, split_unit=units[fact.fact_id]) for fact in facts]
 
 
 def fact_value(fact: Fact, chunks) -> FactValue:
@@ -103,7 +159,8 @@ def build_fact_queries(facts, kb_0_chunks, kb_a_chunks, kb_b_chunks) -> tuple[li
             if any(re.search(rf"\b{re.escape(v)}\b", question.lower()) for v in leaked):
                 raise ValueError(f"{fact.fact_id}: question {index} contains an answer value")
             common = dict(query_id=f"{fact.fact_id}.q{index}", fact_id=fact.fact_id, source=fact.source,
-                          text=question, answer_pattern=fact.pattern, memory_answer=memory)
+                          text=question, answer_pattern=fact.pattern, memory_answer=memory,
+                          drift_event=fact.event, split_unit=fact.unit)
             if a.value is not None or change == "absent":
                 queries_a.append(Query(**common, gold_answer=a.value, drift_type="baseline",
                                        memory_status=memory_status(memory, a.value)))
@@ -113,24 +170,33 @@ def build_fact_queries(facts, kb_0_chunks, kb_a_chunks, kb_b_chunks) -> tuple[li
 
 
 def split_facts(queries_b, test_fraction: float, seed: int) -> tuple[set[str], set[str]]:
-    """Seeded fact-level train/test split, stratified by KB-B drift type.
+    """Seeded train/test split of split units, stratified by KB-B drift type.
 
-    The unit is the fact, not the question: paraphrases of one fact share an
-    answer, so they always land in the same split. Each drift type with two or
-    more facts contributes at least one fact to both splits; a lone fact goes
-    to test so every drift type is evaluated. Stratifying on drift type is an
-    experimenter's design choice; the policy never observes it.
+    The unit is the split unit (Query.split_unit), never the question:
+    paraphrases of one fact, facts changed by one drift event and declared
+    near-duplicate facts always land on the same side. Units are stratified by
+    the set of drift types of their facts; each stratum with two or more units
+    contributes at least one unit to both splits, and a lone unit goes to test
+    so every drift type is evaluated. Stratifying on drift type is an
+    experimenter's design choice; the policy never observes it. Returns fact ids.
     """
-    facts_by_type: dict[str, set[str]] = {}
+    unit_facts: dict[str, set[str]] = {}
+    unit_types: dict[str, set[str]] = {}
     for query in queries_b:
-        facts_by_type.setdefault(query.drift_type, set()).add(query.fact_id)
+        unit = query.split_unit or query.fact_id
+        unit_facts.setdefault(unit, set()).add(query.fact_id)
+        unit_types.setdefault(unit, set()).add(query.drift_type)
+    strata: dict[str, list[str]] = {}
+    for unit, types in unit_types.items():
+        strata.setdefault("+".join(sorted(types)), []).append(unit)
     rng = random.Random(seed)
     test = set()
-    for change in sorted(facts_by_type):
-        fact_ids = sorted(facts_by_type[change])
-        rng.shuffle(fact_ids)
-        n_test = 1 if len(fact_ids) == 1 else min(len(fact_ids) - 1, max(1, round(len(fact_ids) * test_fraction)))
-        test.update(fact_ids[:n_test])
+    for stratum in sorted(strata):
+        units = sorted(strata[stratum])
+        rng.shuffle(units)
+        n_test = 1 if len(units) == 1 else min(len(units) - 1, max(1, round(len(units) * test_fraction)))
+        for unit in units[:n_test]:
+            test |= unit_facts[unit]
     return {query.fact_id for query in queries_b} - test, test
 
 
@@ -139,10 +205,17 @@ def select_facts(queries, fact_ids) -> list[Query]:
 
 
 def describe_queries(queries) -> dict[str, dict[str, int]]:
-    """Counts by memory status and drift type, for run logs and sanity checks."""
+    """Counts by memory status and drift type, for run logs and sanity checks.
+
+    `facts` and `drift_events` count distinct facts and distinct drift events
+    per drift type, so correlated changes (one event, several facts) are not
+    mistaken for independent ones.
+    """
+    types = [t for t in ("baseline", *DRIFT_TYPES) if any(q.drift_type == t for q in queries)]
     return {
         "answerable": sum(q.gold_answer is not None for q in queries),
         "memory_status": {s: sum(q.memory_status == s for q in queries) for s in MEMORY_STATUSES},
-        "drift_type": {t: sum(q.drift_type == t for q in queries)
-                       for t in ("baseline", *DRIFT_TYPES) if any(q.drift_type == t for q in queries)},
+        "drift_type": {t: sum(q.drift_type == t for q in queries) for t in types},
+        "facts": {t: len({q.fact_id for q in queries if q.drift_type == t}) for t in types},
+        "drift_events": {t: len({q.drift_event for q in queries if q.drift_type == t}) for t in types},
     }

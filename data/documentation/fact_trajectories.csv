@@ -1,0 +1,121 @@
+fact_id,source,drift_event,drift_type,kb_0_memory_status,kb_0_memory_rule,kb_0_value,kb_a_value,kb_b_value,kb_b_conflicting_values,memory_status_on_kb_b,kb_a_questions,kb_b_questions
+payments.create_endpoint,payments.md,api_v2_migration,modified,unknown,allocated (stratum modified),,/payments,/v2/payments,,unknown,2,2
+payments.amount_unit,payments.md,payments.amount_unit,unchanged,correct,allocated (stratum unchanged),cents,cents,cents,,correct,2,2
+payments.default_currency,payments.md,payments.default_currency,contradicted,correct,allocated (stratum contradicted),usd,usd,eur,usd,stale,2,2
+payments.max_amount,payments.md,payments.max_amount,unchanged,unknown,allocated (stratum unchanged),,1000000 cents,1000000 cents,,unknown,2,2
+payments.manual_review_threshold,payments.md,payments.manual_review_threshold,removed,correct,allocated (stratum removed),250000 cents,250000 cents,,,stale,2,2
+payments.idempotency_requirement,payments.md,payments.idempotency_requirement,modified,unknown,allocated (stratum modified),,support,require,,unknown,2,2
+payments.idempotency_ttl,payments.md,payments.idempotency_ttl,contradicted,stale,allocated (stratum contradicted),12 hours,24 hours,48 hours,24 hours,stale,2,2
+payments.failure_status,payments.md,payments.failure_status,unchanged,correct,allocated (stratum unchanged),402,402,402,,correct,2,2
+payments.create_status,payments.md,payments.create_status,unchanged,stale,allocated (stratum unchanged),200,201,201,,stale,2,2
+payments.refund_endpoint,payments.md,api_v2_migration,modified,unknown,allocated (stratum modified),,/payments/{id}/refund,/v2/payments/{id}/refund,,unknown,2,2
+payments.refund_window,payments.md,payments.refund_window,added,unknown,not documented in KB-A,,,30 days,,unknown,0,2
+payments.webhook_retries,payments.md,payments.webhook_retries,unchanged,stale,allocated (stratum unchanged),3 times,5 times,5 times,,stale,2,2
+users.create_endpoint,users.md,api_v2_migration,modified,unknown,allocated (stratum modified),,/users,/v2/users,,unknown,2,2
+users.update_method,users.md,users.update_method,modified,stale,allocated (stratum modified),post,put,patch,,stale,2,2
+users.id_type,users.md,users.id_type,unchanged,stale,allocated (stratum unchanged),string,integer,integer,,stale,2,2
+users.email_case,users.md,users.email_case,unchanged,stale,allocated (stratum unchanged),original,lowercase,lowercase,,stale,2,2
+users.password_min_length,users.md,users.password_min_length,modified,correct,allocated (stratum modified),8,8,12,,stale,2,2
+users.default_status,users.md,users.default_status,modified,unknown,allocated (stratum modified),,active,pending,,unknown,2,2
+users.missing_status,users.md,users.missing_status,unchanged,correct,allocated (stratum unchanged),404,404,404,,correct,2,2
+users.deletion_kind,users.md,users.deletion_kind,modified,unknown,allocated (stratum modified),,permanent,reversible,,unknown,2,2
+users.restore_window,users.md,users.restore_window,added,unknown,not documented in KB-A,,,14 days,,unknown,0,2
+users.default_page_size,users.md,users.default_page_size,modified,stale,allocated (stratum modified),10,20,50,,stale,2,2
+users.max_page_size,users.md,user_list_max_size,contradicted,unknown,allocated (stratum contradicted+modified),,100,200,100,unknown,2,2
+users.listing_rate_limit,users.md,users.listing_rate_limit,removed,stale,allocated (stratum removed),30 requests per minute,60 requests per minute,,,stale,2,2
+auth.username_max_length,authentication.md,auth.username_max_length,modified,correct,allocated (stratum modified),150,150,160,,stale,2,2
+auth.first_name_max_length,authentication.md,auth.first_name_max_length,modified,unknown,allocated (stratum modified),,150,160,,unknown,2,2
+auth.last_name_max_length,authentication.md,auth.last_name_max_length,unchanged,stale,allocated (stratum unchanged),30,150,150,,stale,2,2
+auth.permission_name_max_length,authentication.md,auth.permission_name_max_length,modified,correct,allocated (stratum modified),255,255,260,,stale,2,2
+auth.codename_max_length,authentication.md,auth.codename_max_length,unchanged,unknown,allocated (stratum unchanged),,100,100,,unknown,2,2
+auth.group_name_max_length,authentication.md,auth.group_name_max_length,modified,stale,allocated (stratum modified),80,150,160,,stale,2,2
+auth.create_unknown_user_default,authentication.md,auth.create_unknown_user_default,unchanged,unknown,allocated (stratum unchanged),,true,true,,unknown,2,2
+auth.session_idle_timeout,authentication.md,auth.session_idle_timeout,added,unknown,not documented in KB-A,,,4800 seconds,,unknown,0,2
+auth.dev_port,authentication.md,auth.dev_port,added,unknown,not documented in KB-A,,,8020,,unknown,0,2
+config.default_environment,configuration.md,config.default_environment,unchanged,unknown,allocated (stratum unchanged),,production,production,,unknown,2,2
+config.env_variable,configuration.md,config.env_variable,unchanged,correct,allocated (stratum unchanged),app_env,app_env,app_env,,correct,2,2
+config.valid_environments,configuration.md,config.valid_environments,modified,unknown,allocated (stratum modified),,"`development`, `staging`, and `production`","`development`, `staging`, `production`, and `preview`",,unknown,2,2
+config.server_port,configuration.md,config.server_port,modified,stale,allocated (stratum modified),3000,8080,8081,,stale,2,2
+config.request_timeout,configuration.md,config.request_timeout,modified,correct,allocated (stratum modified),30,30,60,,stale,2,2
+config.max_body_size,configuration.md,config.max_body_size,modified,stale,allocated (stratum modified),5 mb,10 mb,25 mb,,stale,2,2
+config.db_pool_size,configuration.md,config.db_pool_size,modified,unknown,allocated (stratum modified),,20,40,,unknown,2,2
+config.db_timeout,configuration.md,config.db_timeout,modified,correct,allocated (stratum modified),5,5,10,,stale,2,2
+config.log_level,configuration.md,config.log_level,modified,correct,allocated (stratum modified),info,info,warn,,stale,2,2
+config.log_format,configuration.md,config.log_format,unchanged,correct,allocated (stratum unchanged),json,json,json,,correct,2,2
+config.dashboard_default,configuration.md,config.dashboard_default,modified,correct,allocated (stratum modified),disabled,disabled,enabled,,stale,2,2
+config.dashboard_flag,configuration.md,config.dashboard_flag,unchanged,unknown,allocated (stratum unchanged),,enable_new_dashboard,enable_new_dashboard,,unknown,2,2
+config.bulk_import_flag,configuration.md,config.bulk_import_flag,added,unknown,not documented in KB-A,,,enable_bulk_import,,unknown,0,2
+security.min_tls_version,security.md,security.min_tls_version,modified,correct,allocated (stratum modified),1.2,1.2,1.3,,stale,2,2
+security.hsts_max_age,security.md,security.hsts_max_age,modified,stale,allocated (stratum modified),86400,15552000,31536000,,stale,2,2
+security.encryption_at_rest,security.md,security.encryption_at_rest,unchanged,unknown,allocated (stratum unchanged),,aes-256,aes-256,,unknown,2,2
+security.password_hash,security.md,security.password_hash,modified,stale,allocated (stratum modified),sha1,bcrypt,argon2id,,stale,2,2
+security.token_lifetime,security.md,security.token_lifetime,modified,stale,allocated (stratum modified),120,60,15,,stale,2,2
+security.key_rotation,security.md,security.key_rotation,modified,stale,allocated (stratum modified),365,180,90,,stale,2,2
+security.admin_mfa,security.md,security.admin_mfa,modified,correct,allocated (stratum modified),optional,optional,required,,stale,2,2
+security.legacy_token_header,security.md,security.legacy_token_header,removed,stale,allocated (stratum removed),x-auth-token,x-legacy-token,,,stale,2,2
+security.sso_protocol,security.md,security.sso_protocol,added,unknown,not documented in KB-A,,,oidc,,unknown,0,2
+security.webhook_signature_header,security.md,security.webhook_signature_header,added,unknown,not documented in KB-A,,,x-signature,,unknown,0,2
+security.csp_mode,security.md,security.csp_mode,modified,stale,allocated (stratum modified),disabled,report-only,enforce,,stale,2,2
+security.audit_retention,security.md,security.audit_retention,modified,stale,allocated (stratum modified),30,90,365,,stale,2,2
+security.report_contact,security.md,security.report_contact,unchanged,correct,allocated (stratum unchanged),security@acme.dev,security@acme.dev,security@acme.dev,,correct,2,2
+deployment.base_image,deployment.md,deployment.base_image,modified,correct,allocated (stratum modified),debian-slim,debian-slim,alpine,,stale,2,2
+deployment.orchestrator,deployment.md,deployment.orchestrator,unchanged,stale,allocated (stratum unchanged),nomad,kubernetes,kubernetes,,stale,2,2
+deployment.primary_region,deployment.md,deployment.primary_region,unchanged,unknown,allocated (stratum unchanged),,us-east-1,us-east-1,,unknown,2,2
+deployment.default_replicas,deployment.md,deployment.default_replicas,modified,unknown,allocated (stratum modified),,3,5,,unknown,2,2
+deployment.release_strategy,deployment.md,deployment.release_strategy,modified,unknown,allocated (stratum modified),,rolling,canary,,unknown,2,2
+deployment.freeze_day,deployment.md,deployment.freeze_day,removed,unknown,allocated (stratum removed),,fridays,,,unknown,2,2
+deployment.autoscaling_threshold,deployment.md,deployment.autoscaling_threshold,added,unknown,not documented in KB-A,,,70,,unknown,0,2
+deployment.cpu_limit,deployment.md,deployment.cpu_limit,modified,stale,allocated (stratum modified),1,2,4,,stale,2,2
+deployment.memory_limit,deployment.md,deployment.memory_limit,modified,unknown,allocated (stratum modified),,4 gb,8 gb,,unknown,2,2
+deployment.health_endpoint,deployment.md,deployment.health_endpoint,unchanged,stale,allocated (stratum unchanged),/health,/healthz,/healthz,,stale,2,2
+deployment.readiness_interval,deployment.md,deployment.readiness_interval,modified,correct,allocated (stratum modified),10,10,5,,stale,2,2
+deployment.secrets_source,deployment.md,deployment.secrets_source,modified,unknown,allocated (stratum modified),,env-files,vault,,unknown,2,2
+deployment.backup_interval,deployment.md,deployment.backup_interval,modified,correct,allocated (stratum modified),24,24,6,,stale,2,2
+deployment.artifact_signing,deployment.md,deployment.artifact_signing,added,unknown,not documented in KB-A,,,cosign,,unknown,0,2
+sessions.store,sessions.md,sessions.store,modified,correct,allocated (stratum modified),database,database,redis,,stale,2,2
+sessions.data_limit,sessions.md,sessions.data_limit,modified,correct,allocated (stratum modified),4 kb,4 kb,16 kb,,stale,2,2
+sessions.purge_interval,sessions.md,sessions.purge_interval,modified,stale,allocated (stratum modified),120,60,15,,stale,2,2
+sessions.max_lifetime,sessions.md,sessions.max_lifetime,modified,unknown,allocated (stratum modified),,24,12,,unknown,2,2
+sessions.concurrent_limit,sessions.md,sessions.concurrent_limit,modified,unknown,allocated (stratum modified),,5,3,,unknown,2,2
+sessions.remember_me_duration,sessions.md,sessions.remember_me_duration,removed,correct,allocated (stratum removed),30,30,,,stale,2,2
+sessions.revoke_path,sessions.md,sessions.revoke_path,added,unknown,not documented in KB-A,,,/sessions/revoke,,unknown,0,2
+sessions.id_length,sessions.md,sessions.id_length,unchanged,correct,allocated (stratum unchanged),32,32,32,,correct,2,2
+sessions.id_rotation,sessions.md,sessions.id_rotation,modified,unknown,allocated (stratum modified),,login,login-and-privilege-change,,unknown,2,2
+sessions.cookie_name,sessions.md,sessions.cookie_name,modified,unknown,allocated (stratum modified),,sessionid,__host-session,,unknown,2,2
+sessions.cookie_samesite,sessions.md,sessions.cookie_samesite,modified,stale,allocated (stratum modified),none,lax,strict,,stale,2,2
+sessions.cookie_httponly,sessions.md,sessions.cookie_httponly,unchanged,unknown,allocated (stratum unchanged),,httponly,httponly,,unknown,2,2
+sessions.cookie_transport,sessions.md,sessions.cookie_transport,added,unknown,not documented in KB-A,,,https,,unknown,0,2
+sessions.cookie_signing,sessions.md,sessions.cookie_signing,unchanged,correct,allocated (stratum unchanged),hmac-sha256,hmac-sha256,hmac-sha256,,correct,2,2
+middleware.first_in_stack,middleware.md,middleware.first_in_stack,modified,correct,allocated (stratum modified),logging,logging,request-id,,stale,2,2
+middleware.request_id_header,middleware.md,middleware.request_id_header,unchanged,stale,allocated (stratum unchanged),x-correlation-id,x-request-id,x-request-id,,stale,2,2
+middleware.request_id_format,middleware.md,middleware.request_id_format,modified,correct,allocated (stratum modified),uuid4,uuid4,ulid,,stale,2,2
+middleware.cors_preflight_cache,middleware.md,middleware.cors_preflight_cache,modified,stale,allocated (stratum modified),60,600,86400,,stale,2,2
+middleware.cors_credentials,middleware.md,middleware.cors_credentials,modified,stale,allocated (stratum modified),ignored,rejected,allowed,,stale,2,2
+middleware.compression_algorithm,middleware.md,middleware.compression_algorithm,modified,correct,allocated (stratum modified),gzip,gzip,brotli,,stale,2,2
+middleware.csrf_header,middleware.md,middleware.csrf_header,unchanged,correct,allocated (stratum unchanged),x-csrf-token,x-csrf-token,x-csrf-token,,correct,2,2
+middleware.csrf_exempt_path,middleware.md,middleware.csrf_exempt_path,removed,unknown,allocated (stratum removed),,/legacy,,,unknown,2,2
+middleware.client_ip_header,middleware.md,middleware.client_ip_header,modified,stale,allocated (stratum modified),x-real-ip,x-forwarded-for,forwarded,,stale,2,2
+middleware.trusted_proxy_hops,middleware.md,middleware.trusted_proxy_hops,added,unknown,not documented in KB-A,,,2,,unknown,0,2
+middleware.multipart_bodies,middleware.md,middleware.multipart_bodies,modified,stale,allocated (stratum modified),ignored,rejected,accepted,,stale,2,2
+middleware.timing_header,middleware.md,middleware.timing_header,added,unknown,not documented in KB-A,,,server-timing,,unknown,0,2
+middleware.error_body_format,middleware.md,middleware.error_body_format,modified,correct,allocated (stratum modified),text,text,problem-json,,stale,2,2
+middleware.error_status,middleware.md,middleware.error_status,unchanged,unknown,allocated (stratum unchanged),,500,500,,unknown,2,2
+payments.partial_refunds,payments.md,payments.partial_refunds,absent,unknown,not documented in KB-A,,,,,unknown,2,2
+users.avatar_size_limit,users.md,users.avatar_size_limit,absent,unknown,not documented in KB-A,,,,,unknown,2,2
+auth.lockout_threshold,authentication.md,auth.lockout_threshold,absent,unknown,not documented in KB-A,,,,,unknown,2,2
+api_base_url,api.md,api_v2_migration,modified,unknown,allocated (stratum modified),,https://api.acme.dev/v1,https://api.acme.dev/v2,,unknown,3,3
+api_version,api.md,api_v2_migration,modified,unknown,allocated (stratum modified),,/v1,/v2,,unknown,3,3
+user_create_endpoint,api.md,api_v2_migration,modified,unknown,allocated (stratum modified),,post /v1/users,post /v2/users,,unknown,3,3
+user_get_endpoint,api.md,api_v2_migration,modified,unknown,allocated (stratum modified),,get /v1/users/{id},get /v2/users/{id},,unknown,3,3
+user_delete_endpoint,api.md,api_v2_migration,modified,unknown,allocated (stratum modified),,delete /v1/users/{id},delete /v2/users/{id},,unknown,3,3
+user_list_limit,api.md,user_list_max_size,modified,unknown,allocated (stratum contradicted+modified),,100,200,,unknown,3,3
+payment_create_endpoint,api.md,api_v2_migration,modified,unknown,allocated (stratum modified),,post /v1/payments,post /v2/payments,,unknown,3,3
+payment_get_endpoint,api.md,api_v2_migration,modified,unknown,allocated (stratum modified),,get /v1/payments/{id},get /v2/payments/{id},,unknown,3,3
+payment_idempotency,api.md,payment_idempotency,unchanged,unknown,allocated (stratum unchanged),,idempotency-key,idempotency-key,,unknown,3,3
+payment_currencies,api.md,payment_currencies,modified,unknown,allocated (stratum modified),,"`usd`, `eur`, and `gbp`","`usd`, `eur`, and `inr`",,unknown,3,3
+api_rate_limit,api.md,api_rate_limit,modified,unknown,allocated (stratum modified),,100 requests per minute,60 requests per minute,,unknown,3,3
+rate_limit_status,api.md,rate_limit_status,unchanged,correct,allocated (stratum unchanged),429,429,429,,correct,3,3
+create_status,api.md,create_status,unchanged,stale,allocated (stratum unchanged),200,201,201,,stale,3,3
+retrieve_status,api.md,retrieve_status,unchanged,stale,allocated (stratum unchanged),204,200,200,,stale,3,3
+webhook_create_endpoint,api.md,webhook_api_added,added,unknown,not documented in KB-A,,,post /v2/webhooks,,unknown,0,2
+webhook_delete_endpoint,api.md,webhook_api_added,added,unknown,not documented in KB-A,,,delete /v2/webhooks/{id},,unknown,0,2
