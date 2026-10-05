@@ -32,7 +32,12 @@ src/environment/rl_rag_env.py  Gymnasium environment: one question per episode, 
 src/agents/baselines.py        Answer-directly, search-N-then-answer, random policies
 src/agents/rl_agent.py         MLP policy, Monte Carlo REINFORCE, checkpoint save/load
 src/agents/dpo.py              Trajectory collection, preference pairs, DPO objective and training
-src/evaluation/metrics.py      Evaluation and retrieval metric helpers
+src/agents/state_preferences.py R2 state-level preferences (source-trust experiment)
+src/environment/source_trust_env.py Source-trust env wrapper over src/pilot + group_split
+src/pilot/source_drift.py      Source-reliability worlds, reader, exact backward induction
+experiments/run_source_trust.py / analyze_source_trust.py  Source-trust experiment and tables
+experiments/pilot_source_drift.py Exact-enumeration pilot (diagnostic variants v0-v6)
+src/evaluation/metrics.py      Episode metric summary (summarize)
 src/evaluation/plots.py        Matplotlib training-curve helper
 tests/test_documents.py        Document and retrieval tests
 tests/test_env.py              Environment, evaluation, training, config and end-to-end tests
@@ -48,7 +53,7 @@ Use this path when making changes:
 2. **Reader:** `src/generation/mock.py`. The two explicit reader assumptions (evidence overrides memory; newest page wins a conflict) live here and nowhere else.
 3. **Observation and environment behavior:** `src/environment/rl_rag_env.py`. `FEATURES` lists every policy-visible feature; `_observation()` builds them; `step()` executes an action and computes reward. This is the control point for feature engineering, not `rl_agent.py`.
 4. **RL logic:** `src/agents/rl_agent.py`. `run_episode()` samples one question; `update()` performs batched REINFORCE; `train_batch()` does both. Change this only when changing the learning algorithm itself.
-5. **Metrics:** `src/evaluation/metrics.py`. `summarize()` computes per-episode metrics from terminal `info` records. `retrieval_diagnostics()` is separate ranking analysis.
+5. **Metrics:** `src/evaluation/metrics.py`. `summarize()` computes per-episode metrics from terminal `info` records. 
 6. **Experiment wiring and decisions:** `experiments/run_all.py`. `run_experiment()` builds the A/B environments, trains/evaluates old/adapted/retrained policies, runs baselines, and writes `summary.csv` and the KB-B sidecar. `approval_decision()` compares candidates to `search_once/kb_b`; `recovery_decision()` compares KB-B candidates to `old_policy/kb_a`.
 7. **Repeated seeds:** read `experiments/run_seeds.py`. It overrides `config["seed"]` for each run, which controls RL initialization and action randomness, writes per-seed summaries, and aggregates metrics. It reuses `run_experiment()` rather than duplicating the benchmark.
 8. **Experiment knobs:** `configs/default.yaml` (see Configuration).
@@ -119,7 +124,7 @@ The policy only selects actions. The environment owns retrieval, the reader, cor
 
 `Retriever` embeds every chunk's `.text` and returns `RetrievalResult(fact, score)` (`fact` holds a `DocumentChunk`). Search uses normalized inner products. The environment builds its retriever once and, at reset, ranks the question's top `top_k * max_searches` chunks; each SEARCH_MORE reveals the next `top_k` of that ranking (paged search), so every search adds unseen evidence.
 
-`Embedder` supports a sentence-transformers backend (`all-MiniLM-L6-v2`, the default) and a hashed bag-of-token fallback. Vectors are cached by text. The YAML embedding settings are still not passed through `make_env()`; `Retriever` defaults are used.
+`Embedder` supports a sentence-transformers backend (`all-MiniLM-L6-v2`, the default) and a hashed bag-of-token fallback. Vectors are cached by text. Embedding settings are not configurable from YAML; `Retriever` defaults are used (note: its default `allow_embedding_fallback=True` falls back to hashed vectors, with a logged warning, if the model cannot load).
 
 `MockAnswerGenerator` is a deterministic slot reader standing in for a frozen LLM, with two explicit assumptions:
 
@@ -247,14 +252,9 @@ corpus_dir: data/documentation
 facts_path: data/documentation/facts.yaml
 test_fraction: 0.4   # share of facts held out per drift type (fact-level split)
 split_seed: 0        # fixed across training seeds, so all seeds share one test set
-knowledge_bases: [kb_a, kb_b]
 top_k: 1            # chunks revealed per SEARCH_MORE (paged search)
 max_searches: 3     # retrieval budget per question
 observe_query_embedding: false  # true = ablation: prepend the query embedding to FEATURES
-use_semantic_embeddings: true
-embedding_model: all-MiniLM-L6-v2
-# Set this to true only when an explicit deterministic offline fallback is desired.
-allow_embedding_fallback: false
 train_epochs: 300   # passes over the question set
 batch_size: 16      # episodes per REINFORCE update
 learning_rate: 0.001
@@ -269,10 +269,9 @@ dpo_batch_size: 32
 dpo_beta: 0.1
 dpo_learning_rate: 0.001
 approval_margin: 0.0
-rolling_window: 30
 ```
 
-`run_all.py` consumes (and `validate_config` requires) `seed`, `corpus_dir`, `facts_path`, `test_fraction`, `split_seed`, `top_k`, `max_searches`, `observe_query_embedding`, `dpo_epochs`, `dpo_batch_size`, `dpo_beta`, `dpo_learning_rate`, `train_epochs`, `batch_size`, `learning_rate`, `entropy_coef`, `retrieval_cost`, `correct_reward`, `incorrect_reward`, `give_up_reward`, and `approval_margin`. `knowledge_bases`, embedding settings and `rolling_window` are present but not wired in. `run_seeds.py` overrides `seed` per run; `split_seed` stays fixed. Aggregates are grouped by (policy, knowledge base, split), and `analyze_adaptation.py` reads the `test` rows.
+`run_all.py` consumes (and `validate_config` requires) `seed`, `corpus_dir`, `facts_path`, `test_fraction`, `split_seed`, `top_k`, `max_searches`, `observe_query_embedding`, `dpo_epochs`, `dpo_batch_size`, `dpo_beta`, `dpo_learning_rate`, `train_epochs`, `batch_size`, `learning_rate`, `entropy_coef`, `retrieval_cost`, `correct_reward`, `incorrect_reward`, `give_up_reward`, and `approval_margin`. The unwired keys `knowledge_bases`, the embedding settings and `rolling_window` were removed on 2026-10-02. `run_seeds.py` overrides `seed` per run; `split_seed` stays fixed. Aggregates are grouped by (policy, knowledge base, split), and `analyze_adaptation.py` reads the `test` rows.
 
 `top_k: 1` is deliberate: with 3 chunks per search, the first search already surfaced both the stale FAQ and the newer reference page for every contradiction, so SEARCH_MORE was never needed. With 1 chunk per search, 5 of 6 contradictions need a second search, and the best fixed search depth differs between KB-A (1 search) and KB-B (2 searches).
 
@@ -288,7 +287,45 @@ python experiments/run_seeds.py --n-seeds 30 --jobs 4 --resume
 python experiments/analyze_adaptation.py --n-seeds 30 --compare-n-seeds 10
 ```
 
-The current suite contains 69 tests covering: split units never straddling train/test; api.md agreeing with payments.md on creation status and idempotency; lead-in chunking and one answer chunk per fact; drift-event declarations (the API migration is exactly the version-path substitutions); the kb_0 memory rule (explicit auditable status for every fact, reproducible and matching the checked-in kb_0, balanced per drift type, shared within drift events, no KB-B-only value in memory, every older value valid, kb_0 rejected as a retrieval corpus, generator uses memory only closed-book); fact-trajectory validation and the checked-in trajectory CSV; DPO stopping strategies, trajectory recording and replay, frozen-policy greedy actions, best-vs-frozen pairs (one per question, only when strictly better and the answer outcome differs, train questions only), cost-only pair removal, tie handling, the RL-352 equal-episode budget, the DPO loss, trajectory log-probabilities, DPO training (moves toward chosen, reference frozen), checkpoint round trip; the evidence-only default observation and the embedding ablation; config validation; an end-to-end old-policy -> checkpoint -> DPO -> saved-policy run using only train facts; the fact-level split (disjoint, stratified, paraphrases together, seeded, KB-A test within KB-B test); an end-to-end run proving no test fact is trained on; corpus formatting and front matter; value-based drift typing and memory status; drift-type coverage; no KB-B leakage into KB-A; non-trivial KB-A memory; no answer values in questions; one question per episode; SEARCH_MORE revealing unseen chunks; budget masking; closed-book, GIVE_UP and unanswerable rewards; newest-source reader resolution (including that it can be wrong); contradictions resolvable by searching more; observations independent of gold/drift labels; retrieval that can fail; baseline behavior; the agent never taking a masked action; frozen evaluation; training and adaptation weight updates; approval/recovery decisions; and the adaptation analysis.
+The current suite contains 84 tests (9 in `tests/test_pilot_source_drift.py`, 6 in `tests/test_source_trust.py`) covering: split units never straddling train/test; api.md agreeing with payments.md on creation status and idempotency; lead-in chunking and one answer chunk per fact; drift-event declarations (the API migration is exactly the version-path substitutions); the kb_0 memory rule (explicit auditable status for every fact, reproducible and matching the checked-in kb_0, balanced per drift type, shared within drift events, no KB-B-only value in memory, every older value valid, kb_0 rejected as a retrieval corpus, generator uses memory only closed-book); fact-trajectory validation and the checked-in trajectory CSV; DPO stopping strategies, trajectory recording and replay, frozen-policy greedy actions, best-vs-frozen pairs (one per question, only when strictly better and the answer outcome differs, train questions only), cost-only pair removal, tie handling, the RL-352 equal-episode budget, the DPO loss, trajectory log-probabilities, DPO training (moves toward chosen, reference frozen), checkpoint round trip; the evidence-only default observation and the embedding ablation; config validation; an end-to-end old-policy -> checkpoint -> DPO -> saved-policy run using only train facts; the fact-level split (disjoint, stratified, paraphrases together, seeded, KB-A test within KB-B test); an end-to-end run proving no test fact is trained on; corpus formatting and front matter; value-based drift typing and memory status; drift-type coverage; no KB-B leakage into KB-A; non-trivial KB-A memory; no answer values in questions; one question per episode; SEARCH_MORE revealing unseen chunks; budget masking; closed-book, GIVE_UP and unanswerable rewards; newest-source reader resolution (including that it can be wrong); contradictions resolvable by searching more; observations independent of gold/drift labels; retrieval that can fail; baseline behavior; the agent never taking a masked action; frozen evaluation; training and adaptation weight updates; approval/recovery decisions; and the adaptation analysis.
+
+## Source-reliability drift pilot (diagnostic only, 2026-09-30)
+
+Isolated; shares no code path with the main experiment. `src/pilot/source_drift.py`, runner `experiments/pilot_source_drift.py` (prints; optional `--output` JSON, never `results/`), tests `tests/test_pilot_source_drift.py`. No training: every strategy (search sequence over sources A/B of length 0-3, then ANSWER or GIVE_UP; 30 strategies) is enumerated and the optimal policy over observable states is solved exactly by backward induction.
+
+- Pool: the 96 facts stated in both KB-A and KB-B (66 changed), 206 questions. Source A ("cache", cost 0.05): one entry per fact, the sentence stating it. Source B ("reference", cost 0.10): all non-FAQ KB chunks. Paged top-1 retrieval per source. Rewards +1 / -1 / 0 (give up); no closed-book memory.
+- Reader: the most recently retrieved statement wins (no dates, no source priority). Observation: the ordered list of sources searched, whether A / B stated the slot, whether A and B disagree.
+- Drift: pilot KB-B truth = KB-B values, B current, a nested seeded fraction p of the changed facts' cache entries still state the KB-A value. Levels 0 / .25 / .5 / .75 / 1 (0 / 16 / 33 / 50 / 66 stale).
+- Results: frozen (KB-A-optimal) return on KB-B 0.929 / 0.604 / 0.234 / -0.114 / -0.429; adapted optimum 0.929 / 0.800 / 0.780 / 0.780 / 0.780; oracle 0.931 / 0.917 / 0.885 / 0.851 / 0.843. States with a changed optimal action 0 / 5 / 8 / 14 / 17 (of 42 KB-A states, all shared; every question passes through one). Outcome-changing preference pairs 0 / 33 / 71 / 107 / 139 (cost-only 4-5). Questions with a changed optimum 14 / 45 / 82 / 110 / 135.
+- Caveats: the changed states are the same observations as before drift (root, "cache answered"): staleness is invisible without searching both sources, so adaptation is a learned shift in source trust, global rather than state-conditional. Disagreement states exist only after drift and the last-wins reader cannot answer with B after seeing A. Source A also retrieves better (top-1 0.83 vs 0.78). The 25% flip is a small root margin (0.800 vs 0.785).
+
+**Pilot extension (2026-09-30):** `Variant(cache, reader, staleness, page_feature)` in `src/pilot/source_drift.py`; runner `--variants`. `cache="mirror"`: Source A is a copy of Source B's chunks with stale values substituted (retrieval quality identical: top-1 0.78 / top-3 0.91 for both). `reader="choose"`: ANSWER_A / ANSWER_B answer with the chosen source's statement. `staleness="page"`: whole pages go stale in a seeded page order. `page_feature="first"`: the page of the first retrieved entry is observed; `"steps"`: the page of every retrieved entry.
+
+Results (drift 0 / .25 / .5 / .75 / 1; changed states; adapted return; oracle - adapted gap; outcome-changing pairs):
+- v1 mirror, last-wins: changed 0/5/5/9/10; adapted 0.846/0.780/0.780/0.780/0.780; gap .013/.070/.061/.053/.044; pairs 0/33/66/96/129. Frozen 0.846 -> 0.526/0.205/-0.086/-0.407. The effect survives the retrieval control.
+- v2 mirror + choose reader: identical to v1 on every metric (the optimum never searches A then B; the reader mechanism does not matter).
+- v3 mirror + choose + page staleness, no page feature: adapted 0.780 at every level, gap on questions whose cache is still correct ~0.08 as with random staleness: the existing observation cannot use concentration, so a page feature was tested.
+- v4 page of every step: 611 states for 206 questions and 4 changed states at 0% drift (near question-identifying; not trusted).
+- v5 page of first entry + page staleness: 257 states; changed 0/14/19/37/54; adapted 0.848/0.812/0.783/0.783/0.783; gap .012/.039/.060/.049/.041; at 25% only 60 of 206 questions pass through a changed state (state-conditional adaptation); pairs 0/31/64/100/129.
+- v6 same feature, random staleness (control): adapted 0.783 at every drifted level; gap .067 at 25%; every question passes through a changed state. So v5's gain at 25% comes from concentration, not from the finer state space.
+- Page information is only worth its price at low stale share: learning the page costs a cache search (0.05); from 50% (5 of 9 pages stale) the optimum is "always search the reference" again.
+
+R2 diagnostic (2026-09-30, scratch only): state-level preferences failed the pre-stated page-dependent criteria (2/5 seeds >= 90% held-out agreement at 25%; insufficient state support). Decision: headline = global source-trust adaptation, no page feature, R2 frozen as the preference rule.
+
+## Source-trust experiment (frozen spec, 2026-10-02)
+
+Files: `src/environment/source_trust_env.py` (step-wise env over the pilot functions; `VARIANT` = mirror cache, choose-source reader, page staleness, no page feature; 5 actions answer_A/answer_B/give_up/search_A/search_B; 9-input one-to-one encoding of the pilot observation; `group_split` = the R2 diagnostic's split: split units stratified by page, 0.4, seed 0 -> 105 train / 101 test questions), `src/agents/state_preferences.py` (R2), `experiments/run_source_trust.py` + `configs/source_trust.yaml`, `experiments/analyze_source_trust.py`, `tests/test_source_trust.py` (6 tests incl. the R2 0% guard). Reuses `RLAgent` (actions=5) and `dpo.train_dpo` unchanged.
+
+- Stage 1: REINFORCE on KB-A train (300 epochs, batch 16, lr 1e-3, entropy 0.01; 31,500 episodes, 2,100 updates). Stage 2: frozen on KB-B. Stage 3: DPO (beta 0.1, 20 epochs, batch 32, lr 1e-3) on R2 pairs; zero pairs -> policy unchanged. Stage 4: REINFORCE fine-tuning, 4,725 episodes (= DPO's enumeration: 45 strategies x 105 train questions), 315 updates. References: held-out observable optimum (exact, solved on test), train-fitted exact policy, per-question oracle.
+- R2: Q(s,a) by backward induction over KB-B train questions; at the first state on the frozen greedy trajectory where the frozen action is not Q-optimal, chosen = prefix + train-optimal continuation, rejected = frozen trajectory.
+- Matrix: drift 0/25/50/75/100% x page seeds 0-4 x training seeds 0-4 = 125 runs. Outputs in a scratch directory only.
+
+Results (2026-10-02, held-out returns):
+- **Stage 1 is bimodal.** Seeds 0, 4 learn the intended "cache, answer from cache" (KB-A test 0.627); seeds 1-3 converge to "always reference" (0.551, a local optimum). None learns to give up when evidence is missing (KB-A test optimum 0.776; accuracy 0.851 for all). Policies are near-deterministic (p ~ 0.9995).
+- Seeds 1-3 do not degrade under drift at all (0.550 at every level). Their DPO/RL changes (+0.05 mean, all from seed 2 learning give-up) are identical at 0% drift: repair of Stage-1 imperfection, not drift adaptation.
+- Cache-trusting seeds (0, 4; 10 runs per level), frozen / DPO / RL / optimum: 0% 0.626/0.626/0.626/0.775; 25% 0.409/0.370/0.513/0.700; 50% 0.112/0.077/0.260/0.698; 75% -0.268/-0.291/-0.058/0.698; 100% -0.521/-0.540/-0.372/0.698. DPO is slightly worse than frozen at every drifted level; RL gains +0.10 to +0.21, almost entirely by giving up after fruitless cache searches (accuracy unchanged except 75%), not by switching source.
+- R2 signal exists: 105 pairs per drifted run for seeds 0/4, all at the root, search_A -> search_B (outcome-changing 22/40/55/74 at 25-100%); 0% drift: 3 outcome-changing pairs, the same 3 as R2 on KB-A (no drift-caused signal). DPO loss 0.68 -> 0.29 but pi(search_B | root) only 0.0003 -> 0.01; DPO's harm comes from lowering the rejected trajectories' later actions (search_A at "cache silent twice"), so it answers after 2 cache searches instead of 3.
+- Diagnostic only (10x budget, seeds 0/4, page seed 0): DPO x10 flips to "always reference" for seed 0 (0.55 at every drifted level) but collapses to "always give up" (-0.15) for seed 4 and for both seeds at 0% (from 3 pairs). RL x10 switches source in 4 of 8 drifted cells, reaches the optimum 0.775 at 0%, and collapses to give-up once (seed 0, 100%). Neither is stable.
 
 ## Current limitations and next work
 
@@ -297,9 +334,7 @@ The current suite contains 69 tests covering: split units never straddling train
 - Fixed 2026-09-30: KB-A api.md now says the payment endpoint "supports" (was "requires") an `Idempotency-Key` header, matching payments.md; KB-B api.md resource creation returns 201 (was 202), matching payments.md/users.md (`create_status` is now unchanged). Remaining known cross-page inconsistency, inert for the slot reader: KB-A payments.md/users.md unversioned paths vs api.md `/v1`. The `payment_idempotency` questions still say "required", which is only true in KB-B.
 - DPO-352 (outcome-changing best-vs-frozen pairs) does not move the policy away from the frozen behavior in the 3-seed smoke run: 11 pairs and 20 updates; contradictions are partly unobservable after one search (see results). No tuning has been done.
 - The default observation is evidence-only; the policy cannot tell apart questions with identical evidence state, which is intended (it must generalize) but makes per-state preference balance matter for DPO.
-- The active runner relies on `Retriever` defaults because the YAML embedding settings are not passed through `make_env()`; explicit embedding-model/fallback configuration remains future wiring work.
 - Run the benchmark with `.venv\Scripts\python.exe` so it does not depend on an unrelated system Python installation.
-- Retrieval diagnostics exist in `src/evaluation/metrics.py`, but the runner does not currently write per-query retrieval diagnostics.
 - The environment is stationary within each experiment arm; it does not apply scheduled drift during an episode.
 - Approval is a baseline-relative heuristic, not a statistical significance test; its reference row and margin are recorded in the CSV for auditability.
 - Per-step logs, recovery-time analysis, and richer plots remain future work.

@@ -45,7 +45,3 @@ class Retriever:
             scores = (self.vectors @ vector[0]).tolist()
             pairs = sorted(enumerate(scores), key=lambda item: item[1], reverse=True)[:top_k]
         return [RetrievalResult(self.facts[int(index)], float(score)) for index, score in pairs if int(index) >= 0]
-
-    @property
-    def embedding_metadata(self) -> dict:
-        return self.embedder.metadata()

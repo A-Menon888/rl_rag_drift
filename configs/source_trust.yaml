@@ -1,0 +1,22 @@
+# Source-reliability drift experiment (frozen 2026-10-02). Environment constants
+# (costs A 0.05 / B 0.10, rewards +1 / -1 / 0, 3 searches, mirror cache,
+# choose-source reader, no page feature) live in src/pilot/source_drift.py and
+# src/environment/source_trust_env.py and are not configurable here.
+corpus_dir: data/documentation
+facts_path: data/documentation/facts.yaml
+test_fraction: 0.4     # group-aware split (drift events + near-duplicates), stratified by page
+split_seed: 0
+drift_levels: [0.0, 0.25, 0.5, 0.75, 1.0]
+page_seeds: [0, 1, 2, 3, 4]    # page-order seeds for staleness: experimental replicates
+train_seeds: [0, 1, 2, 3, 4]   # RL initialisation / sampling / DPO shuffling; fixed before any run
+# Stage 1 (KB-A) REINFORCE and the RL adaptation arm (same settings as configs/default.yaml)
+train_epochs: 300
+batch_size: 16
+learning_rate: 0.001
+entropy_coef: 0.01
+# DPO (unchanged from configs/default.yaml)
+dpo_epochs: 20
+dpo_batch_size: 32
+dpo_beta: 0.1
+dpo_learning_rate: 0.001
+# RL adaptation episodes = DPO's enumeration budget (45 strategies x train questions); not a knob.

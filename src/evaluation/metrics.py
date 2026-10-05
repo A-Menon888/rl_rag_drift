@@ -1,50 +1,5 @@
 import numpy as np
 
-from src.data.facts import extract_values
-
-
-def _states_gold(query, chunk):
-    return query.gold_answer in extract_values(query.answer_pattern, chunk.text)
-
-
-def retrieval_diagnostics(retriever, queries, top_k=3, version=0):
-    """Return auditable per-query ranking records for one KB snapshot.
-
-    A retrieved chunk is relevant when it states the query's gold value for its
-    answer slot. Unanswerable queries (gold None) have no relevant chunk.
-    """
-    rows = []
-    for query in queries:
-        results = retriever.search(query, top_k)
-        answerable = query.gold_answer is not None
-        rank = next((position + 1 for position, result in enumerate(results)
-                     if answerable and _states_gold(query, result.fact)), 0)
-        rows.append({
-            "query_id": query.query_id,
-            "query": query.text,
-            "expected_chunk_id": next((fact.document_id for fact in retriever.facts
-                                       if answerable and fact.source == query.source and _states_gold(query, fact)), None),
-            "rank": rank,
-            "top_1_chunk_id": results[0].fact.document_id if results else None,
-            "top_1_source": results[0].fact.source if results else None,
-            "top_1_score": results[0].score if results else None,
-            "top_2_score": results[1].score if len(results) > 1 else None,
-            "score_margin": results[0].score - results[1].score if len(results) > 1 else None,
-            "retrieved_chunk_ids": "|".join(result.fact.document_id for result in results),
-        })
-    return rows
-
-
-def summarize_retrieval_diagnostics(rows, top_k=3):
-    if not rows:
-        return {"recall_at_1": 0.0, f"recall_at_{top_k}": 0.0, "mrr": 0.0}
-    ranks = np.array([row["rank"] for row in rows])
-    return {
-        "recall_at_1": float(np.mean(ranks == 1)),
-        f"recall_at_{top_k}": float(np.mean((ranks >= 1) & (ranks <= top_k))),
-        "mrr": float(np.mean([1.0 / rank if rank else 0.0 for rank in ranks])),
-    }
-
 
 def summarize(infos):
     """Per-episode metrics from the terminal info record of each question."""
